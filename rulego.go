@@ -110,134 +110,141 @@ package rulego
 
 import (
 	"github.com/rulego/rulego/api/types"
-	"github.com/rulego/rulego/utils/fs"
-	"strings"
-	"sync"
+	"github.com/rulego/rulego/builtin/aspect"
+	"github.com/rulego/rulego/endpoint"
+	"github.com/rulego/rulego/engine"
 )
 
-var DefaultRuleGo = &RuleGo{}
+// Registry is the default registrar for rule engine components.
+var Registry = engine.Registry
 
-// RuleGo 规则引擎实例池
-type RuleGo struct {
-	ruleEngines sync.Map
-}
+// Rules is the default instance of RuleGo with the rule engine pool set to the default pool.
+var Rules = &RuleGo{ruleEnginePool: engine.DefaultPool}
 
-// Load 加载指定文件夹及其子文件夹所有规则链配置（与.json结尾文件），到规则引擎实例池
-// 规则链ID，使用规则链文件配置的ruleChain.id
-func (g *RuleGo) Load(folderPath string, opts ...RuleEngineOption) error {
-	if !strings.HasSuffix(folderPath, "*.json") && !strings.HasSuffix(folderPath, "*.JSON") {
-		if strings.HasSuffix(folderPath, "/") || strings.HasSuffix(folderPath, "\\") {
-			folderPath = folderPath + "*.json"
-		} else if folderPath == "" {
-			folderPath = "./*.json"
-		} else {
-			folderPath = folderPath + "/*.json"
-		}
-	}
-	paths, err := fs.GetFilePaths(folderPath)
-	if err != nil {
-		return err
-	}
-	for _, path := range paths {
-		b := fs.LoadFile(path)
-		if b != nil {
-			if _, err = g.New("", b, opts...); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
+var Endpoints = endpoint.DefaultPool
 
-// New 创建一个新的RuleEngine并将其存储在RuleGo规则链池中
-// 如果指定id="",则使用规则链文件的ruleChain.id
-func (g *RuleGo) New(id string, rootRuleChainSrc []byte, opts ...RuleEngineOption) (*RuleEngine, error) {
-	if v, ok := g.ruleEngines.Load(id); ok {
-		return v.(*RuleEngine), nil
-	} else {
-		if ruleEngine, err := newRuleEngine(id, rootRuleChainSrc, opts...); err != nil {
-			return nil, err
-		} else {
-			if ruleEngine.Id != "" {
-				// Store the new RuleEngine in the ruleEngines map with the Id as the key.
-				g.ruleEngines.Store(ruleEngine.Id, ruleEngine)
-			}
-			ruleEngine.RuleChainPool = g
-			return ruleEngine, err
-		}
-
-	}
-}
-
-// Get 获取指定ID规则引擎实例
-func (g *RuleGo) Get(id string) (*RuleEngine, bool) {
-	v, ok := g.ruleEngines.Load(id)
-	if ok {
-		return v.(*RuleEngine), ok
-	} else {
-		return nil, false
-	}
-}
-
-// Del 删除指定ID规则引擎实例
-func (g *RuleGo) Del(id string) {
-	v, ok := g.ruleEngines.Load(id)
-	if ok {
-		v.(*RuleEngine).Stop()
-		g.ruleEngines.Delete(id)
-	}
-}
-
-// Stop 释放所有规则引擎实例
-func (g *RuleGo) Stop() {
-	g.ruleEngines.Range(func(key, value any) bool {
-		if item, ok := value.(*RuleEngine); ok {
-			item.Stop()
-		}
-		g.ruleEngines.Delete(key)
-		return true
+func init() {
+	engine.BuiltinsAspects = append(engine.BuiltinsAspects, &aspect.EndpointAspect{
+		EndpointPool: Endpoints,
+		RuleGoPool:   Rules,
 	})
 }
 
-// OnMsg 调用所有规则引擎实例处理消息
-// 规则引擎实例池所有规则链都会去尝试处理该消息
+// Ensure RuleGo implements the RuleEnginePool interface.
+var _ types.RuleEnginePool = (*RuleGo)(nil)
+
+// RuleGo is a pool of rule engine instances.
+type RuleGo struct {
+	ruleEnginePool *engine.Pool
+}
+
+// Engine returns the rule engine pool.
+func (g *RuleGo) Engine() *engine.Pool {
+	return g.ruleEnginePool
+}
+
+// Load loads all rule chain configurations from the specified folder and its subFolders into the rule engine instance pool.
+// The rule chain ID is taken from the ruleChain.id specified in the rule chain file.
+func (g *RuleGo) Load(folderPath string, opts ...types.RuleEngineOption) error {
+	if g.ruleEnginePool == nil {
+		g.ruleEnginePool = engine.NewPool()
+	}
+	return g.ruleEnginePool.Load(folderPath, opts...)
+}
+
+// New creates a new RuleEngine and stores it in the RuleGo rule chain pool.
+// If the specified id is empty (""), the ruleChain.id from the rule chain file is used.
+func (g *RuleGo) New(id string, rootRuleChainSrc []byte, opts ...types.RuleEngineOption) (types.RuleEngine, error) {
+	return g.ruleEnginePool.New(id, rootRuleChainSrc, opts...)
+}
+
+// Get retrieves a rule engine instance by its ID.
+func (g *RuleGo) Get(id string) (types.RuleEngine, bool) {
+	return g.ruleEnginePool.Get(id)
+}
+
+// Del removes a rule engine instance by its ID.
+func (g *RuleGo) Del(id string) {
+	g.ruleEnginePool.Del(id)
+}
+
+// Stop releases all rule engine instances.
+func (g *RuleGo) Stop() {
+	g.ruleEnginePool.Stop()
+}
+
+// Range iterates over all rule engine instances.
+func (g *RuleGo) Range(f func(key, value any) bool) {
+	g.ruleEnginePool.Range(f)
+}
+
+// Reload reloads all rule engine instances.
+func (g *RuleGo) Reload(opts ...types.RuleEngineOption) {
+	g.ruleEnginePool.Reload(opts...)
+}
+
+// OnMsg calls all rule engine instances to process a message.
+// All rule chains in the rule engine instance pool will attempt to process the message.
 func (g *RuleGo) OnMsg(msg types.RuleMsg) {
-	g.ruleEngines.Range(func(key, value any) bool {
-		if item, ok := value.(*RuleEngine); ok {
+	g.ruleEnginePool.Range(func(key, value any) bool {
+		if item, ok := value.(types.RuleEngine); ok {
 			item.OnMsg(msg)
 		}
 		return true
 	})
 }
 
-// Load 加载指定文件夹及其子文件夹所有规则链配置（与.json结尾文件），到规则引擎实例池
-// 规则链ID，使用文件配置的 ruleChain.id
-func Load(folderPath string, opts ...RuleEngineOption) error {
-	return DefaultRuleGo.Load(folderPath, opts...)
+// Load loads all rule chain configurations from the specified folder and its subFolders into the rule engine instance pool.
+// The rule chain ID is taken from the ruleChain.id specified in the rule chain file.
+func Load(folderPath string, opts ...types.RuleEngineOption) error {
+	return Rules.Load(folderPath, opts...)
 }
 
-// New 创建一个新的RuleEngine并将其存储在RuleGo规则链池中
-func New(id string, rootRuleChainSrc []byte, opts ...RuleEngineOption) (*RuleEngine, error) {
-	return DefaultRuleGo.New(id, rootRuleChainSrc, opts...)
+// New creates a new RuleEngine and stores it in the RuleGo rule chain pool.
+func New(id string, rootRuleChainSrc []byte, opts ...types.RuleEngineOption) (types.RuleEngine, error) {
+	return Rules.New(id, rootRuleChainSrc, opts...)
 }
 
-// Get 获取指定ID规则引擎实例
-func Get(id string) (*RuleEngine, bool) {
-	return DefaultRuleGo.Get(id)
+// Get retrieves a rule engine instance by its ID.
+func Get(id string) (types.RuleEngine, bool) {
+	return Rules.Get(id)
 }
 
-// Del 删除指定ID规则引擎实例
+// Del removes a rule engine instance by its ID.
 func Del(id string) {
-	DefaultRuleGo.Del(id)
+	Rules.Del(id)
 }
 
-// Stop 释放所有规则引擎实例
+// Stop releases all rule engine instances.
 func Stop() {
-	DefaultRuleGo.Stop()
+	Rules.Stop()
 }
 
-// OnMsg 调用所有规则引擎实例处理消息
-// 规则引擎实例池所有规则链都会去尝试处理该消息
+// OnMsg calls all rule engine instances to process a message.
+// All rule chains in the rule engine instance pool will attempt to process the message.
 func OnMsg(msg types.RuleMsg) {
-	DefaultRuleGo.OnMsg(msg)
+	Rules.OnMsg(msg)
+}
+
+// Reload reloads all rule engine instances.
+func Reload(opts ...types.RuleEngineOption) {
+	Rules.Range(func(key, value any) bool {
+		_ = value.(types.RuleEngine).Reload(opts...)
+		return true
+	})
+}
+
+// Range iterates over all rule engine instances.
+func Range(f func(key, value any) bool) {
+	Rules.Range(f)
+}
+
+// NewConfig creates a new Config and applies the options.
+func NewConfig(opts ...types.Option) types.Config {
+	return engine.NewConfig(opts...)
+}
+
+// WithConfig is an option that sets the Config of the RuleEngine.
+func WithConfig(config types.Config) types.RuleEngineOption {
+	return engine.WithConfig(config)
 }

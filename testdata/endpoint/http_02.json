@@ -1,0 +1,38 @@
+{
+  "id": "e2",
+  "type": "http",
+  "name": "http server",
+  "configuration": {
+    "server": ":9090"
+  },
+  "routers": [
+    {
+      "id": "r1",
+      "params": [
+        "post"
+      ],
+      "from": {
+        "path": "/api/v2/test/:chainId",
+        "configuration": {
+        }
+      },
+      "to": {
+        "path": "${chainId}"
+      }
+    },
+    {
+      "id": "r2",
+      "params": [
+        "post"
+      ],
+      "from": {
+        "path": "/api/v2/test2/:chainId",
+        "configuration": {
+        }
+      },
+      "to": {
+        "path": "${chainId}"
+      }
+    }
+  ]
+}

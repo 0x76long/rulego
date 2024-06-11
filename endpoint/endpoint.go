@@ -1,5 +1,5 @@
 /*
- * Copyright 2023 The RuleGo Authors.
+ * Copyright 2024 The RuleGo Authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,575 +14,419 @@
  * limitations under the License.
  */
 
-// Package endpoint /**
-
+// Package endpoint provides a module that abstracts different input source data routing, providing a consistent user experience for different protocols. It is an optional module of `RuleGo` that enables RuleGo to run independently and provide services.
+//
+// It allows you to easily create and start different receiving services, such as http, mqtt, kafka, gRpc, websocket, schedule, tpc, udp, etc., to achieve data integration of heterogeneous systems, and then perform conversion, processing, flow, etc. operations according to different requests or messages, and finally hand them over to the rule chain or component for processing.
+//
+// Additionally, it supports dynamic creation and updates through DSL.
+//
+// # Usage
+//
+// Endpoint DSL Example:
+//
+//	{
+//	  "id": "e1",
+//	  "type": "http",
+//	  "name": "http server",
+//	  "configuration": {
+//	    "server": ":9090"
+//	  },
+//	 "routers": [
+//	   {
+//	     "id":"r1",
+//	     "params": [
+//	       "post"
+//	     ],
+//	     "from": {
+//	       "path": "/api/v1/test/:chainId",
+//	       "configuration": {
+//	       }
+//	     },
+//	     "to": {
+//	       "path": "${chainId}"
+//	     },
+//	     "additionalInfo": {
+//	       "aa":"aa"
+//	     }
+//	   }
+//	 ]
+//	}
+//
+// Create a endpoint Instance
+//
+//	ep, err := endpoint.New("e1", []byte(endpointFile))
+//
+// Start Endpoint
+//
+//	err := ep.Start()
+//
+// Get Reload Endpoint
+//
+//	_ = ep.Reload(newEndpointFile)
+//
+//	_ = ep.Reload(newEndpointFile, endpoint.DynamicEndpointOptions.WithRestart(true))//Restart Endpoint
+//
+// Add Or Reload Router
+//
+//	 routerDsl :=`{
+//	     "id":"r1",
+//	     "params": [
+//	       "post"
+//	     ],
+//	     "from": {
+//	       "path": "/api/v3/test/:chainId",
+//	       "configuration": {
+//	       }
+//	     },
+//	     "to": {
+//	       "path": "${chainId}"
+//	     }
+//	   }`
+//	_ = ep.AddOrReloadRouter([]byte(routerDsl))
+//
+// Get Endpoint
+//
+//	ep,ok:=Get("id")
+//
+// Destroy Endpoint
+//
+//	Del("id")
 package endpoint
 
 import (
-	"context"
 	"errors"
-	"fmt"
-	"github.com/rulego/rulego"
 	"github.com/rulego/rulego/api/types"
-	"github.com/rulego/rulego/utils/str"
-	"net/textproto"
-	"strings"
+	"github.com/rulego/rulego/api/types/endpoint"
+	"github.com/rulego/rulego/builtin/processor"
+	"github.com/rulego/rulego/endpoint/impl"
+	"github.com/rulego/rulego/engine"
+	"github.com/rulego/rulego/utils/json"
+	"reflect"
 	"sync"
-	"sync/atomic"
 )
 
-const (
-	pathKey = "_path"
-)
+// Endpoint is an alias for the Endpoint interface in the endpoint package.
+type Endpoint = endpoint.Endpoint
 
-var (
-	//ChainNotFoundErr 规则链不存在错误
-	ChainNotFoundErr = errors.New("chain not found error")
-	//StopErr endpoint服务停止错误
-	StopErr = errors.New("endpoint stop")
-)
+// Exchange is deprecated. Use Flow from github.com/rulego/rulego/api/types/endpoint.Exchange instead.
+type Exchange = endpoint.Exchange
 
-type Endpoint interface {
-	//Node 继承node
-	types.Node
-	//Id 类型标识
-	Id() string
-	//Start 启动服务
-	Start() error
-	//AddInterceptors 添加全局拦截器
-	AddInterceptors(interceptors ...Process)
-	//AddRouter 添加路由，指定参数
-	//params 为路由额外参数
-	//返回路由ID，路由ID一般是from值，但某些Endpoint允许from值重复，Endpoint会返回新的路由ID，
-	//路由ID用于路由删除
-	AddRouter(router *Router, params ...interface{}) (string, error)
-	//RemoveRouter 删除路由，指定参数
-	//params 为路由额外参数
-	//routerId:路由ID
-	RemoveRouter(routerId string, params ...interface{}) error
+// NewRouter creates a new router with the provided options.
+func NewRouter(opts ...endpoint.RouterOption) endpoint.Router {
+	return impl.NewRouter(opts...)
 }
 
-// Message 接收端点数据抽象接口
-// 不同输入源数据统一接口
-type Message interface {
-	//Body message body
-	Body() []byte
-	Headers() textproto.MIMEHeader
-	From() string
-	//GetParam http.Request#FormValue
-	GetParam(key string) string
-	//SetMsg set RuleMsg
-	SetMsg(msg *types.RuleMsg)
-	//GetMsg 把接收数据转换成 RuleMsg
-	GetMsg() *types.RuleMsg
-	//SetStatusCode 响应 code
-	SetStatusCode(statusCode int)
-	//SetBody 响应 body
-	SetBody(body []byte)
-	//SetError 设置错误
-	SetError(err error)
-	//GetError 获取错误
-	GetError() error
+// Ensure DynamicEndpoint implements the DynamicEndpoint interface.
+var _ endpoint.DynamicEndpoint = (*DynamicEndpoint)(nil)
+
+// DynamicEndpoint represents a dynamic endpoint with additional properties and methods.
+type DynamicEndpoint struct {
+	Endpoint
+	id         string
+	definition types.EndpointDsl
+	ruleConfig types.Config
+	// Interceptors are the interceptors for the endpoint.
+	interceptors []endpoint.Process
+	// RouterOpts are the router options for the endpoint.
+	routerOpts []endpoint.RouterOption
+	// Restart indicates whether the endpoint should be restarted.
+	restart bool
+	locker  sync.RWMutex
 }
 
-// Exchange 包含in 和out message
-type Exchange struct {
-	//入数据
-	In Message
-	//出数据
-	Out Message
-}
-
-// Process 处理函数
-// true:执行下一个处理器，否则不执行
-type Process func(router *Router, exchange *Exchange) bool
-
-// From from端
-type From struct {
-	//Config 配置
-	Config types.Configuration
-	//Router router指针
-	Router *Router
-	//来源路径
-	From string
-	//消息处理拦截器
-	processList []Process
-	//流转目标路径，例如"chain:{chainId}"，则是交给规则引擎处理数据
-	to *To
-}
-
-func (f *From) ToString() string {
-	return f.From
-}
-
-// Transform from端转换msg
-func (f *From) Transform(transform Process) *From {
-	f.processList = append(f.processList, transform)
-	return f
-}
-
-// Process from端处理msg
-func (f *From) Process(process Process) *From {
-	f.processList = append(f.processList, process)
-	return f
-}
-
-// GetProcessList 获取from端处理器列表
-func (f *From) GetProcessList() []Process {
-	return f.processList
-}
-
-// ExecuteProcess 执行处理函数
-// true:执行To端逻辑，否则不执行
-func (f *From) ExecuteProcess(router *Router, exchange *Exchange) bool {
-	result := true
-	for _, process := range f.GetProcessList() {
-		if !process(router, exchange) {
-			result = false
-			break
-		}
+// NewFromDsl creates a new DynamicEndpoint from the provided DSL definition and options.
+func NewFromDsl(def []byte, opts ...endpoint.DynamicEndpointOption) (endpoint.DynamicEndpoint, error) {
+	if len(def) == 0 {
+		return nil, errors.New("def cannot be nil")
 	}
-	return result
-}
-
-// To To端
-// 参数是组件路径，格式{executorType}:{path} executorType：执行器组件类型，path:组件路径
-// 如：chain:{chainId} 执行rulego中注册的规则链
-// component:{nodeType} 执行在config.ComponentsRegistry 中注册的组件
-// 可在DefaultExecutorFactory中注册自定义执行器组件类型
-// componentConfigs 组件配置参数
-func (f *From) To(to string, configs ...types.Configuration) *To {
-	var toConfig = make(types.Configuration)
-	for _, item := range configs {
-		for k, v := range item {
-			toConfig[k] = v
-		}
+	e := &DynamicEndpoint{}
+	if err := e.Reload(def, opts...); err != nil {
+		return nil, err
 	}
-	f.to = &To{Router: f.Router, To: to, Config: toConfig}
-	//路径中是否有变量，如：chain:${userId}
-	if strings.Contains(to, "${") && strings.Contains(to, "}") {
-		f.to.HasVars = true
+	if e.id == "" && e.definition.Id != "" {
+		e.id = e.definition.Id
 	}
-	//获取To执行器类型
-	executorType := strings.Split(to, ":")[0]
+	return e, nil
+}
 
-	//获取To执行器
-	if executor, ok := DefaultExecutorFactory.New(executorType); ok {
-		if f.to.HasVars && !executor.IsPathSupportVar() {
-			panic(fmt.Errorf("executor=%s, path not support variables", executorType))
-		}
-		f.to.ToPath = strings.TrimSpace(to[len(executorType)+1:])
-		toConfig[pathKey] = f.to.ToPath
-		//初始化组件
-		err := executor.Init(f.Router.Config, toConfig)
-		if err != nil {
-			panic(err)
-		}
-		f.to.executor = executor
-	} else {
-		f.to.executor = &ChainExecutor{}
-		f.to.ToPath = to
+func NewFromDef(def types.EndpointDsl, opts ...endpoint.DynamicEndpointOption) (endpoint.DynamicEndpoint, error) {
+	e := &DynamicEndpoint{}
+	if err := e.ReloadFromDef(def, opts...); err != nil {
+		return nil, err
 	}
-	return f.to
-}
-
-func (f *From) GetTo() *To {
-	return f.to
-}
-
-// ToComponent to组件
-// 参数是types.Node类型组件
-func (f *From) ToComponent(node types.Node) *To {
-	component := &ComponentExecutor{component: node, config: f.Router.Config}
-	f.to = &To{Router: f.Router, To: node.Type(), ToPath: node.Type()}
-	f.to.executor = component
-	return f.to
-}
-
-// End 结束返回*Router
-func (f *From) End() *Router {
-	return f.Router
-}
-
-// To to端
-type To struct {
-	//toPath是否有占位符变量
-	HasVars bool
-	//Config to组件配置
-	Config types.Configuration
-	//Router router指针
-	Router *Router
-	//流转目标路径，例如"chain:{chainId}"，则是交给规则引擎处理数据
-	To string
-	//去掉to执行器标记的路径
-	ToPath string
-	//消息处理拦截器
-	processList []Process
-	//目标处理器，默认是规则链处理
-	executor Executor
-	//等待规则链/组件执行结束，并恢复到父进程，同步得到规则链结果。
-	//用于需要等待规则链执行结果，并且要保留父进程的场景，否则不需要设置该字段。例如：http的响应。
-	wait bool
-}
-
-// ToStringByDict 转换路径中的变量，并返回最终字符串
-func (t *To) ToStringByDict(dict map[string]string) string {
-	if t.HasVars {
-		return str.SprintfDict(t.ToPath, dict)
+	if e.id == "" && e.definition.Id != "" {
+		e.id = e.definition.Id
 	}
-	return t.ToPath
+	return e, nil
 }
 
-func (t *To) ToString() string {
-	return t.ToPath
+// Id returns the identifier of the DynamicEndpoint.
+func (e *DynamicEndpoint) Id() string {
+	return e.id
 }
 
-// Execute 执行To端逻辑
-func (t *To) Execute(ctx context.Context, exchange *Exchange) {
-	if t.executor != nil {
-		t.executor.Execute(ctx, t.Router, exchange)
-	}
+// SetId sets the identifier of the DynamicEndpoint.
+func (e *DynamicEndpoint) SetId(id string) {
+	e.id = id
 }
 
-// Transform 执行To端逻辑 后转换，如果规则链有多个结束点，则会执行多次
-func (t *To) Transform(transform Process) *To {
-	t.processList = append(t.processList, transform)
-	return t
+// SetConfig sets the configuration for the DynamicEndpoint.
+func (e *DynamicEndpoint) SetConfig(config types.Config) {
+	e.ruleConfig = config
 }
 
-// Process 执行To端逻辑 后处理，如果规则链有多个结束点，则会执行多次
-func (t *To) Process(process Process) *To {
-	t.processList = append(t.processList, process)
-	return t
+// SetRouterOptions sets the router options for the DynamicEndpoint.
+func (e *DynamicEndpoint) SetRouterOptions(opts ...endpoint.RouterOption) {
+	e.routerOpts = opts
 }
 
-// Wait 等待规则链/组件执行结束，并恢复到父进程。同步得到规则链结果。
-// 用于需要等待规则链执行结果，并且要保留父进程的场景，否则不需要设置该字段。例如：http的响应。
-func (t *To) Wait() *To {
-	t.wait = true
-	return t
+// SetRestart sets the restart flag for the DynamicEndpoint.
+func (e *DynamicEndpoint) SetRestart(restart bool) {
+	e.restart = restart
 }
 
-// GetProcessList 获取执行To端逻辑 处理器
-func (t *To) GetProcessList() []Process {
-	return t.processList
+// SetInterceptors sets the interceptors for the DynamicEndpoint.
+func (e *DynamicEndpoint) SetInterceptors(interceptors ...endpoint.Process) {
+	e.interceptors = interceptors
 }
 
-// End 结束返回*Router
-func (t *To) End() *Router {
-	return t.Router
-}
-
-// Router 路由，抽象不同输入源数据路由
-// 把消息从输入端（From），经过转换（Transform）成RuleMsg结构，或者处理Process，然后交给规则链处理（To）
-// 或者 把消息从输入端（From），经过转换（Transform），然后处理响应（Process）
-// 用法：
-// http endpoint
-// endpoint.NewRouter().From("/api/v1/msg/").Transform().To("chain:xx")
-// endpoint.NewRouter().From("/api/v1/msg/").Transform().Process().To("chain:xx")
-// endpoint.NewRouter().From("/api/v1/msg/").Transform().Process().To("component:nodeType")
-// endpoint.NewRouter().From("/api/v1/msg/").Transform().Process()
-// mqtt endpoint
-// endpoint.NewRouter().From("#").Transform().Process().To("chain:xx")
-// endpoint.NewRouter().From("topic").Transform().Process().To("chain:xx")
-type Router struct {
-	//输入
-	from *From
-	//规则链池，默认使用rulego.DefaultRuleGo
-	RuleGo *rulego.RuleGo
-	//Config ruleEngine Config
-	Config types.Config
-	//是否不可用 1:不可用;0:可以
-	disable uint32
-}
-
-// RouterOption 选项函数
-type RouterOption func(*Router) error
-
-// WithRuleGo 更改规则链池，默认使用rulego.DefaultRuleGo
-func WithRuleGo(ruleGo *rulego.RuleGo) RouterOption {
-	return func(re *Router) error {
-		re.RuleGo = ruleGo
-		return nil
-	}
-}
-
-// WithRuleConfig 更改规则引擎配置
-func WithRuleConfig(config types.Config) RouterOption {
-	return func(re *Router) error {
-		re.Config = config
-		return nil
-	}
-}
-
-// NewRouter 创建新的路由
-func NewRouter(opts ...RouterOption) *Router {
-	router := &Router{RuleGo: rulego.DefaultRuleGo, Config: rulego.NewConfig()}
-	// 设置选项值
-	for _, opt := range opts {
-		_ = opt(router)
-	}
-	return router
-}
-
-func (r *Router) FromToString() string {
-	if r.from == nil {
-		return ""
-	} else {
-		return r.from.ToString()
-	}
-}
-
-func (r *Router) From(from string, configs ...types.Configuration) *From {
-	var fromConfig = make(types.Configuration)
-	for _, item := range configs {
-		for k, v := range item {
-			fromConfig[k] = v
-		}
-	}
-	r.from = &From{Router: r, From: from, Config: fromConfig}
-
-	return r.from
-}
-
-func (r *Router) GetFrom() *From {
-	return r.from
-}
-
-// Disable 设置状态 true:不可用，false:可以
-func (r *Router) Disable(disable bool) *Router {
-	if disable {
-		atomic.StoreUint32(&r.disable, 1)
-	} else {
-		atomic.StoreUint32(&r.disable, 0)
-	}
-	return r
-}
-
-// IsDisable 是否是不可用状态 true:不可用，false:可以
-func (r *Router) IsDisable() bool {
-	return atomic.LoadUint32(&r.disable) == 1
-}
-
-// BaseEndpoint 基础端点
-// 实现全局拦截器基础方法
-type BaseEndpoint struct {
-	//全局拦截器
-	interceptors []Process
-	//endpoint 路由存储器
-	RouterStorage map[string]*Router
-	sync.RWMutex
-}
-
-func (e *BaseEndpoint) OnMsg(ctx types.RuleContext, msg types.RuleMsg) {
-	panic("not support this method")
-}
-
-// AddInterceptors 添加全局拦截器
-func (e *BaseEndpoint) AddInterceptors(interceptors ...Process) {
+// AddInterceptors adds interceptors to the DynamicEndpoint.
+func (e *DynamicEndpoint) AddInterceptors(interceptors ...endpoint.Process) {
 	e.interceptors = append(e.interceptors, interceptors...)
+	e.Endpoint.AddInterceptors(interceptors...)
 }
 
-func (e *BaseEndpoint) DoProcess(router *Router, exchange *Exchange) {
-	for _, item := range e.interceptors {
-		//执行全局拦截器
-		if !item(router, exchange) {
-			return
-		}
-	}
-	//执行from端逻辑
-	if fromFlow := router.GetFrom(); fromFlow != nil {
-		if !fromFlow.ExecuteProcess(router, exchange) {
-			return
-		}
-	}
-	//执行to端逻辑
-	if router.GetFrom() != nil && router.GetFrom().GetTo() != nil {
-		router.GetFrom().GetTo().Execute(context.TODO(), exchange)
-	}
-}
-
-// Executor to端执行器
-type Executor interface {
-	//New 创建新的实例
-	New() Executor
-	//IsPathSupportVar to路径是否支持${}变量方式，默认不支持
-	IsPathSupportVar() bool
-	//Init 初始化
-	Init(config types.Config, configuration types.Configuration) error
-	//Execute 执行逻辑
-	Execute(ctx context.Context, router *Router, exchange *Exchange)
-}
-
-// ExecutorFactory to端执行器工厂
-type ExecutorFactory struct {
-	sync.RWMutex
-	executors map[string]Executor
-}
-
-// Register 注册to端执行器
-func (r *ExecutorFactory) Register(name string, executor Executor) {
-	r.Lock()
-	r.Unlock()
-	if r.executors == nil {
-		r.executors = make(map[string]Executor)
-	}
-	r.executors[name] = executor
-}
-
-// New 根据类型创建to端执行器实例
-func (r *ExecutorFactory) New(name string) (Executor, bool) {
-	r.RLock()
-	r.RUnlock()
-	h, ok := r.executors[name]
-	if ok {
-		return h.New(), true
+// Reload reloads the DynamicEndpoint with the provided definition and options.
+func (e *DynamicEndpoint) Reload(dsl []byte, opts ...endpoint.DynamicEndpointOption) error {
+	if dsl, err := e.unmarshal(dsl); err != nil {
+		return err
 	} else {
-		return nil, false
-	}
-
-}
-
-// ChainExecutor 规则链执行器
-type ChainExecutor struct {
-}
-
-func (ce *ChainExecutor) New() Executor {
-
-	return &ChainExecutor{}
-}
-
-// IsPathSupportVar to路径允许带变量
-func (ce *ChainExecutor) IsPathSupportVar() bool {
-	return true
-}
-
-func (ce *ChainExecutor) Init(_ types.Config, _ types.Configuration) error {
-	return nil
-}
-
-func (ce *ChainExecutor) Execute(ctx context.Context, router *Router, exchange *Exchange) {
-	fromFlow := router.GetFrom()
-	if fromFlow == nil {
-		return
-	}
-	inMsg := exchange.In.GetMsg()
-	if toFlow := fromFlow.GetTo(); toFlow != nil && inMsg != nil {
-		toChainId := toFlow.ToStringByDict(inMsg.Metadata.Values())
-
-		//查找规则链，并执行
-		if ruleEngine, ok := router.RuleGo.Get(toChainId); ok {
-			//监听结束回调函数
-			endFunc := types.WithEndFunc(func(ctx types.RuleContext, msg types.RuleMsg, err error) {
-				if err != nil {
-					exchange.Out.SetError(err)
-				} else {
-					exchange.Out.SetMsg(&msg)
-				}
-
-				for _, process := range toFlow.GetProcessList() {
-					if !process(router, exchange) {
-						break
-					}
-				}
-			})
-			if toFlow.wait {
-				//同步
-				ruleEngine.OnMsgAndWait(*inMsg, types.WithContext(ctx), endFunc)
-			} else {
-				//异步
-				ruleEngine.OnMsg(*inMsg, types.WithContext(ctx), endFunc)
-			}
-		} else {
-			//找不到规则链返回错误
-			for _, process := range toFlow.GetProcessList() {
-				exchange.Out.SetError(fmt.Errorf("chainId=%s not found error", toChainId))
-				if !process(router, exchange) {
-					break
-				}
-			}
-		}
-
+		return e.ReloadFromDef(dsl, opts...)
 	}
 }
 
-// ComponentExecutor node组件执行器
-type ComponentExecutor struct {
-	component types.Node
-	config    types.Config
-}
-
-func (ce *ComponentExecutor) New() Executor {
-	return &ComponentExecutor{}
-}
-
-// IsPathSupportVar to路径不允许带变量
-func (ce *ComponentExecutor) IsPathSupportVar() bool {
-	return false
-}
-
-func (ce *ComponentExecutor) Init(config types.Config, configuration types.Configuration) error {
-	ce.config = config
-	if configuration == nil {
-		return fmt.Errorf("nodeType can't empty")
+// AddOrReloadRouter reloads the router for the DynamicEndpoint with the provided definition and options.
+func (e *DynamicEndpoint) AddOrReloadRouter(dsl []byte, opts ...endpoint.DynamicEndpointOption) error {
+	var routerDsl types.RouterDsl
+	if err := json.Unmarshal(dsl, &routerDsl); err != nil {
+		return err
 	}
-	var nodeType = ""
-	if v, ok := configuration[pathKey]; ok {
-		nodeType = str.ToString(v)
+	_, err := e.AddRouterFromDef(&routerDsl)
+	e.restart = false
+	for _, opt := range opts {
+		_ = opt(e)
 	}
-	node, err := config.ComponentsRegistry.NewNode(nodeType)
-	if err == nil {
-		ce.component = node
-		err = ce.component.Init(config, configuration)
+	if e.restart {
+		return e.reloadEndpoint(e.definition)
 	}
 	return err
 }
 
-func (ce *ComponentExecutor) Execute(ctx context.Context, router *Router, exchange *Exchange) {
-	if ce.component != nil {
-		fromFlow := router.GetFrom()
-		if fromFlow == nil {
-			return
-		}
+// Definition returns the DSL definition of the DynamicEndpoint.
+func (e *DynamicEndpoint) Definition() types.EndpointDsl {
+	return e.definition
+}
 
-		inMsg := exchange.In.GetMsg()
-		if toFlow := fromFlow.GetTo(); toFlow != nil && inMsg != nil {
-			//初始化的空上下文
-			ruleCtx := rulego.NewRuleContext(ctx, ce.config, nil, nil, nil, ce.config.Pool, func(ctx types.RuleContext, msg types.RuleMsg, err error, relationType string) {
-				if err != nil {
-					exchange.Out.SetError(err)
-				} else {
-					exchange.Out.SetMsg(&msg)
-				}
-				for _, process := range toFlow.GetProcessList() {
-					if !process(router, exchange) {
-						break
-					}
-				}
-			}, rulego.DefaultRuleGo)
+// DSL returns the DSL as a byte slice.
+func (e *DynamicEndpoint) DSL() []byte {
+	dsl, _ := json.Marshal(e.definition)
+	return dsl
+}
 
-			if toFlow.wait {
-				c := make(chan struct{})
-				ruleCtx.SetAllCompletedFunc(func() {
-					close(c)
-				})
-				//执行组件逻辑
-				ce.component.OnMsg(ruleCtx, *inMsg)
-				//等待执行结束
-				<-c
-			} else {
-				//执行组件逻辑
-				ce.component.OnMsg(ruleCtx, *inMsg)
+// Target returns the underlying Endpoint of the DynamicEndpoint.
+func (e *DynamicEndpoint) Target() endpoint.Endpoint {
+	return e.Endpoint
+}
+
+// RemoveRouter removes a router from the DynamicEndpoint by its ID and parameters.
+func (e *DynamicEndpoint) RemoveRouter(routerId string, params ...interface{}) error {
+	e.locker.Lock()
+	defer e.locker.Unlock()
+	if err := e.Endpoint.RemoveRouter(routerId, params...); err == nil {
+		var newRouters []*types.RouterDsl
+		for _, item := range e.definition.Routers {
+			if item.Id != routerId {
+				newRouters = append(newRouters, item)
 			}
+		}
+		e.definition.Routers = newRouters
+	}
+	return nil
+}
+
+// AddRouterFromDef adds a router to the DynamicEndpoint from the provided DSL.
+func (e *DynamicEndpoint) AddRouterFromDef(routerDsl *types.RouterDsl) (string, error) {
+	if routerDsl == nil {
+		return "", errors.New("routerDsl cannot be nil")
+	}
+	_ = e.RemoveRouter(routerDsl.Id, routerDsl.Params...)
+
+	var opts = []endpoint.RouterOption{endpoint.RouterOptions.WithDefinition(routerDsl)}
+	opts = append(opts, e.routerOpts...)
+
+	e.locker.Lock()
+	defer e.locker.Unlock()
+	from := NewRouter(opts...).SetId(routerDsl.Id).From(routerDsl.From.Path, routerDsl.From.Configuration)
+	for _, item := range routerDsl.From.Processors {
+		if p, ok := processor.Builtins.Get(item); ok {
+			from.Process(p)
+		} else {
+			return "", errors.New("processor not found: " + item)
+		}
+	}
+	if routerDsl.To.Path != "" {
+		to := from.To(routerDsl.To.Path, routerDsl.To.Configuration)
+		for _, item := range routerDsl.To.Processors {
+			if p, ok := processor.Builtins.Get(item); ok {
+				to.Process(p)
+			} else {
+				return "", errors.New("processor not found: " + item)
+			}
+		}
+		if routerDsl.To.Wait {
+			to.Wait()
+		}
+	}
+	router := from.End()
+	if id, err := e.Endpoint.AddRouter(router, routerDsl.Params...); err != nil {
+		return "", err
+	} else {
+		routerDsl.Id = id
+		e.definition.Routers = append(e.definition.Routers, routerDsl)
+		return id, err
+	}
+}
+
+// ReloadFromDef initializes the DynamicEndpoint with the provided DSL and options.
+func (e *DynamicEndpoint) ReloadFromDef(def types.EndpointDsl, opts ...endpoint.DynamicEndpointOption) error {
+	e.restart = false
+	e.ruleConfig = engine.NewConfig(types.WithDefaultPool())
+	for _, opt := range opts {
+		_ = opt(e)
+	}
+	if e.Endpoint != nil {
+		return e.reloadEndpoint(def)
+	} else {
+		return e.newEndpoint(def)
+	}
+}
+
+// newEndpoint creates a new Endpoint with the provided DSL.
+func (e *DynamicEndpoint) newEndpoint(dsl types.EndpointDsl) error {
+	if ep, err := Registry.New(dsl.Type, e.ruleConfig, dsl.Configuration); err != nil {
+		return err
+	} else {
+		e.Endpoint = ep
+		e.definition = dsl
+		if e.id == "" {
+			e.id = ep.Id()
+		}
+		e.AddInterceptors(e.interceptors...)
+		for _, item := range dsl.Routers {
+			if _, err := e.AddRouterFromDef(item); err != nil {
+				return err
+			}
+		}
+		// Add interceptors
+		for _, item := range dsl.Processors {
+			if p, ok := processor.Builtins.Get(item); ok {
+				e.AddInterceptors(p)
+			} else {
+				return errors.New("processor not found: " + item)
+			}
+		}
+		if e.restart {
+			return ep.Start()
+		} else {
+			return nil
 		}
 	}
 }
 
-// DefaultExecutorFactory 默认to端执行器注册器
-var DefaultExecutorFactory = new(ExecutorFactory)
+// reloadEndpoint reloads the Endpoint with the provided DSL.
+func (e *DynamicEndpoint) reloadEndpoint(def types.EndpointDsl) error {
+	if e.Endpoint != nil && (e.restart || needRestart(e.definition, def)) {
+		e.Endpoint.Destroy()
+		e.Endpoint = nil
+		e.restart = true
+		return e.newEndpoint(def)
+	}
+	// Check for changes in routers
+	added, removed, modified := checkRouterChanges(e.definition.Routers, def.Routers)
+	for _, item := range removed {
+		_ = e.RemoveRouter(item.Id, item.Params...)
+	}
+	for _, item := range added {
+		if _, err := e.AddRouterFromDef(item); err != nil {
+			return err
+		}
+	}
+	for _, item := range modified {
+		if _, err := e.AddRouterFromDef(item); err != nil {
+			return err
+		}
+	}
+	e.definition = def
+	return nil
+}
 
-// 注册默认执行器
-func init() {
-	DefaultExecutorFactory.Register("chain", &ChainExecutor{})
-	DefaultExecutorFactory.Register("component", &ComponentExecutor{})
+// unmarshal converts the provided byte slice into an EndpointDsl.
+func (e *DynamicEndpoint) unmarshal(def []byte) (types.EndpointDsl, error) {
+	var dsl types.EndpointDsl
+	if len(def) != 0 {
+		if err := json.Unmarshal(def, &dsl); err != nil {
+			return types.EndpointDsl{}, err
+		}
+	} else {
+		dsl = e.definition
+	}
+	return dsl, nil
+}
+
+// needRestart determines whether the endpoint needs to be restarted based on the old and new EndpointBaseInfo
+func needRestart(old, new types.EndpointDsl) bool {
+	if old.Type != new.Type {
+		return true
+	}
+	return !reflect.DeepEqual(old.Configuration, new.Configuration) || !reflect.DeepEqual(old.Processors, new.Processors)
+}
+
+// checkRouterChanges checks for added, removed, and modified routers in a list of RouterDsl.
+func checkRouterChanges(oldRouters, newRouters []*types.RouterDsl) (added, removed, modified []*types.RouterDsl) {
+	// Create a map to hold the old routers with their ID as the key.
+	oldMap := make(map[string]*types.RouterDsl)
+	// Create a map to hold the new routers with their ID as the key.
+	newMap := make(map[string]*types.RouterDsl)
+
+	// Convert the old and new routers into maps using their ID as the key.
+	for _, r := range oldRouters {
+		oldMap[r.Id] = r
+	}
+	for _, r := range newRouters {
+		newMap[r.Id] = r
+	}
+
+	// Check for routers that are new in the newMap but not present in the oldMap.
+	for id, r := range newMap {
+		if _, exists := oldMap[id]; !exists {
+			added = append(added, r) // Add new routers to the added slice.
+		}
+	}
+
+	// Check for routers that are present in the oldMap but not in the newMap.
+	for id, r := range oldMap {
+		if _, exists := newMap[id]; !exists {
+			removed = append(removed, r)
+		}
+	}
+
+	// Check for routers that are modified, i.e., present in both maps but not equal.
+	for id, newR := range newMap {
+		if oldR, exists := oldMap[id]; exists {
+			if !reflect.DeepEqual(oldR, newR) {
+				modified = append(modified, newR)
+			}
+		}
+	}
+	return added, removed, modified
 }

@@ -1,21 +1,26 @@
 package websocket
 
 import (
+	"fmt"
 	"github.com/gorilla/websocket"
-	"github.com/rulego/rulego"
 	"github.com/rulego/rulego/api/types"
-	"github.com/rulego/rulego/endpoint"
+	"github.com/rulego/rulego/api/types/endpoint"
+	"github.com/rulego/rulego/endpoint/impl"
+	"github.com/rulego/rulego/endpoint/rest"
+	"github.com/rulego/rulego/engine"
 	"github.com/rulego/rulego/test"
 	"github.com/rulego/rulego/test/assert"
+	"github.com/rulego/rulego/utils/maps"
 	"log"
 	"net/http"
 	"os"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
 )
 
-var testdataFolder = "../../testdata"
+var testdataFolder = "../../testdata/rule"
 var testServer = ":9090"
 var testConfigServer = ":9091"
 
@@ -31,44 +36,76 @@ func TestWebSocketMessage(t *testing.T) {
 	})
 }
 
+func TestRouterId(t *testing.T) {
+	config := types.NewConfig()
+	var nodeConfig = make(types.Configuration)
+	_ = maps.Map2Struct(&Config{
+		Server: testServer,
+	}, nodeConfig)
+	var ep = &Endpoint{}
+	err := ep.Init(config, nodeConfig)
+	assert.Nil(t, err)
+	assert.Equal(t, testServer, ep.Id())
+	router := impl.NewRouter().SetId("r1").From("/device/info").End()
+	routerId, _ := ep.AddRouter(router, "GET")
+	assert.Equal(t, "r1", routerId)
+
+	router = impl.NewRouter().From("/device/info/v2").End()
+	routerId, _ = ep.AddRouter(router, "POST")
+	assert.Equal(t, "/device/info/v2", routerId)
+
+	err = ep.RemoveRouter("r1")
+	assert.Nil(t, err)
+	err = ep.RemoveRouter("/device/info/v2")
+	assert.Nil(t, err)
+	err = ep.RemoveRouter("/device/info/v2")
+	assert.Equal(t, fmt.Sprintf("router: %s not found", "/device/info/v2"), err.Error())
+}
+
 func TestWsEndpointConfig(t *testing.T) {
-	config := rulego.NewConfig(types.WithDefaultPool())
+	config := engine.NewConfig(types.WithDefaultPool())
 	//创建endpoint服务
-	wsStarted, _ := endpoint.New(Type, config, Config{
+	var nodeConfig = make(types.Configuration)
+	_ = maps.Map2Struct(&Config{
 		Server: testConfigServer,
-	})
+	}, nodeConfig)
+	var wsStarted = &Endpoint{}
+	err := wsStarted.Init(config, nodeConfig)
+	assert.Nil(t, err)
+
 	assert.Equal(t, testConfigServer, wsStarted.Id())
 
-	go func() {
-		err := wsStarted.Start()
-		assert.Equal(t, "http: Server closed", err.Error())
-	}()
+	err = wsStarted.Start()
+	assert.Nil(t, err)
+
+	//go func() {
+	//	err := wsStarted.Start()
+	//	assert.Equal(t, "http: Server closed", err.Error())
+	//}()
 
 	time.Sleep(time.Millisecond * 200)
 
-	epErr, _ := endpoint.New(Type, config, types.Configuration{
-		"server": testConfigServer,
-	})
+	var epErr = &Endpoint{}
+	err = epErr.Init(config, nodeConfig)
 
-	ep, _ := endpoint.New(Type, config, types.Configuration{
-		"server": testConfigServer,
-	})
+	var ep = &Endpoint{}
+	err = ep.Init(config, nodeConfig)
 
 	assert.Equal(t, testConfigServer, ep.Id())
 	testUrl := "/api/test"
-	router := endpoint.NewRouter().From(testUrl).End()
+	router := impl.NewRouter().From(testUrl).End()
 	routerId, _ := ep.AddRouter(router, "GET")
 	assert.Equal(t, "/api/test", routerId)
 
-	router = endpoint.NewRouter().From(testUrl).End()
-	routerId, _ = ep.AddRouter(router, "GET")
-	assert.Equal(t, "/api/test", routerId)
+	router = impl.NewRouter().From(testUrl).End()
+	_, err = ep.AddRouter(router, "GET")
+	assert.NotNil(t, err)
 
 	//删除路由
-	ep.RemoveRouter(routerId)
-	ep.RemoveRouter(routerId, "GET")
+	_ = ep.RemoveRouter(routerId)
+	_ = ep.RemoveRouter(routerId, "GET")
 
-	ep.AddRouter(nil)
+	_, _ = ep.AddRouter(nil)
 	wsStarted.Destroy()
 	epErr.Destroy()
 	time.Sleep(time.Millisecond * 200)
@@ -79,12 +116,28 @@ func TestWsEndpoint(t *testing.T) {
 	wg.Add(1)
 	stop := make(chan struct{})
 	//启动服务
-	go startServer(t, stop, &wg)
+	go startServer(t, stop, &wg, false)
 	//等待服务器启动完毕
 	time.Sleep(time.Millisecond * 200)
 
 	sendMsg(t, "ws://127.0.0.1"+testServer+"/api/v1/echo/TEST_MSG_TYPE1?aa=xx")
+	//停止服务器
+	stop <- struct{}{}
+	time.Sleep(time.Millisecond * 200)
+	wg.Wait()
+}
 
+func TestMultiplexRestEndpoint(t *testing.T) {
+	var wg sync.WaitGroup
+	wg.Add(1)
+	stop := make(chan struct{})
+	//启动服务
+	go startServer(t, stop, &wg, true)
+	//等待服务器启动完毕
+	time.Sleep(time.Millisecond * 200)
+
+	sendMsg(t, "ws://127.0.0.1"+testServer+"/api/v1/echo/TEST_MSG_TYPE1?aa=xx")
+	time.Sleep(time.Millisecond * 200)
 	//停止服务器
 	stop <- struct{}{}
 	time.Sleep(time.Millisecond * 200)
@@ -99,7 +152,10 @@ func sendMsg(t *testing.T, url string) {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer conn.Close()
+	defer func() {
+		time.Sleep(time.Millisecond * 200)
+		conn.Close()
+	}()
 
 	// 发送消息
 	err = conn.WriteMessage(websocket.BinaryMessage, []byte("Hello, world!"))
@@ -117,36 +173,72 @@ func sendMsg(t *testing.T, url string) {
 }
 
 // 启动服务
-func startServer(t *testing.T, stop chan struct{}, wg *sync.WaitGroup) {
+func startServer(t *testing.T, stop chan struct{}, wg *sync.WaitGroup, isMultiplex bool) {
 	buf, err := os.ReadFile(testdataFolder + "/chain_msg_type_switch.json")
 	if err != nil {
 		t.Fatal(err)
 	}
-	config := rulego.NewConfig(types.WithDefaultPool())
+	config := engine.NewConfig(types.WithDefaultPool())
 	//注册规则链
-	_, _ = rulego.New("default", buf, rulego.WithConfig(config))
-
-	//启动ws接收服务
-	wsEndpoint, err := endpoint.New(Type, config, Config{Server: ":9090"})
-
-	go func() {
-		for {
-			select {
-			case <-stop:
-				// 接收到中断信号，退出循环
-				wsEndpoint.Destroy()
-				return
-			default:
+	_, _ = engine.New("default", buf, engine.WithConfig(config))
+	var wsEndpoint endpoint.Endpoint
+	restEndpoint := &rest.Endpoint{
+		Config: rest.Config{Server: testServer},
+	}
+	//复用rest endpoint
+	if isMultiplex {
+		restEndpoint.OnEvent = func(eventName string, params ...interface{}) {
+			if eventName == endpoint.EventInitServer {
+				wsEndpoint = newWebsocketServe(t, restEndpoint)
+				if err := wsEndpoint.Start(); err != nil {
+					t.Fatal("error:", err)
+				}
 			}
 		}
-	}()
+	} else {
+		wsEndpoint = newWebsocketServe(t, nil)
+	}
+
+	if isMultiplex {
+		//复用rest endpoint
+		_ = restEndpoint.Start()
+	} else {
+		//并启动服务
+		_ = wsEndpoint.Start()
+	}
+	<-stop
+	wsEndpoint.Destroy()
+	restEndpoint.Destroy()
+	wg.Done()
+}
+
+func newWebsocketServe(t *testing.T, restEndpoint *rest.Rest) endpoint.Endpoint {
+	config := engine.NewConfig(types.WithDefaultPool())
+	//wsEndpoint, err := endpoint.New(Type, config, Config{Server: testServer})
+
+	var nodeConfig = make(types.Configuration)
+	_ = maps.Map2Struct(&Config{
+		Server: testServer,
+	}, nodeConfig)
+	var wsEndpoint = &Endpoint{}
+	err := wsEndpoint.Init(config, nodeConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	assert.Equal(t, "ws", wsEndpoint.Type())
+	assert.True(t, reflect.DeepEqual(&Websocket{}, wsEndpoint.New()))
+
+	if restEndpoint != nil {
+		wsEndpoint = &Websocket{RestEndpoint: restEndpoint}
+	}
 	//添加全局拦截器
-	wsEndpoint.AddInterceptors(func(router *endpoint.Router, exchange *endpoint.Exchange) bool {
+	wsEndpoint.AddInterceptors(func(router endpoint.Router, exchange *endpoint.Exchange) bool {
 		//权限校验逻辑
 		return true
 	})
 	//路由1
-	router1 := endpoint.NewRouter().From("/api/v1/echo/:msgType").Process(func(router *endpoint.Router, exchange *endpoint.Exchange) bool {
+	router1 := impl.NewRouter().From("/api/v1/echo/:msgType").Process(func(router endpoint.Router, exchange *endpoint.Exchange) bool {
 		//处理请求
 		requestMessage, ok := exchange.In.(*RequestMessage)
 		if ok {
@@ -192,12 +284,11 @@ func startServer(t *testing.T, stop chan struct{}, wg *sync.WaitGroup) {
 			return true
 		}
 
-	}).Process(func(router *endpoint.Router, exchange *endpoint.Exchange) bool {
+	}).Process(func(router endpoint.Router, exchange *endpoint.Exchange) bool {
 		exchange.In.GetMsg().Type = exchange.In.GetParam("msgType")
-
 		exchange.Out.SetBody([]byte("s2 process" + "\n"))
 		return true
-	}).To("chain:default").Process(func(router *endpoint.Router, exchange *endpoint.Exchange) bool {
+	}).To("chain:default").Process(func(router endpoint.Router, exchange *endpoint.Exchange) bool {
 		exchange.Out.SetBody([]byte("规则链执行结果：" + exchange.Out.GetMsg().Data + "\n"))
 		return true
 	}).End()
@@ -205,8 +296,6 @@ func startServer(t *testing.T, stop chan struct{}, wg *sync.WaitGroup) {
 	//注册路由
 	wsEndpoint.AddRouter(router1)
 
-	assert.NotNil(t, wsEndpoint.(*Endpoint).Router())
-	//并启动服务
-	_ = wsEndpoint.Start()
-	wg.Done()
+	assert.NotNil(t, wsEndpoint.Router())
+	return wsEndpoint
 }

@@ -91,6 +91,9 @@ func (ctx *NodeTestRuleContext) TellSelf(msg types.RuleMsg, delayMs int64) {
 		}
 	})
 }
+func (ctx *NodeTestRuleContext) TellNextOrElse(msg types.RuleMsg, defaultRelationType string, relationTypes ...string) {
+	ctx.TellNext(msg, relationTypes...)
+}
 func (ctx *NodeTestRuleContext) NewMsg(msgType string, metaData types.Metadata, data string) types.RuleMsg {
 	return types.NewMsg(0, msgType, types.JSON, metaData, data)
 }
@@ -164,4 +167,18 @@ func (ctx *NodeTestRuleContext) ExecuteNode(context context.Context, nodeId stri
 
 func (ctx *NodeTestRuleContext) DoOnEnd(msg types.RuleMsg, err error, relationType string) {
 
+}
+
+// SetCallbackFunc 设置回调函数
+func (ctx *NodeTestRuleContext) SetCallbackFunc(functionName string, f interface{}) {
+
+}
+
+// GetCallbackFunc 获取回调函数
+func (ctx *NodeTestRuleContext) GetCallbackFunc(functionName string) interface{} {
+	return nil
+}
+
+// OnDebug 调用配置的OnDebug回调函数
+func (ctx *NodeTestRuleContext) OnDebug(ruleChainId string, flowType string, nodeId string, msg types.RuleMsg, relationType string, err error) {
 }

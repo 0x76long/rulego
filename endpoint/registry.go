@@ -1,5 +1,5 @@
 /*
- * Copyright 2023 The RuleGo Authors.
+ * Copyright 2024 The RuleGo Authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,86 +17,64 @@
 package endpoint
 
 import (
-	"errors"
 	"fmt"
 	"github.com/rulego/rulego/api/types"
+	"github.com/rulego/rulego/api/types/endpoint"
+	"github.com/rulego/rulego/endpoint/mqtt"
+	"github.com/rulego/rulego/endpoint/net"
+	"github.com/rulego/rulego/endpoint/rest"
+	"github.com/rulego/rulego/endpoint/schedule"
+	"github.com/rulego/rulego/endpoint/websocket"
+	"github.com/rulego/rulego/engine"
 	"github.com/rulego/rulego/utils/maps"
-	"sync"
 )
 
-// Registry endpoint组件默认注册器
+// init registers the available endpoint components with the Registry.
+func init() {
+	_ = Registry.Register(&mqtt.Endpoint{})
+	_ = Registry.Register(&rest.Endpoint{})
+	_ = Registry.Register(&net.Endpoint{})
+	_ = Registry.Register(&websocket.Endpoint{})
+	_ = Registry.Register(&schedule.Endpoint{})
+}
+
+// Registry is the default registry for endpoint components.
 var Registry = new(ComponentRegistry)
 
-// ComponentRegistry 组件注册器
+// ComponentRegistry is a registry for endpoint components.
 type ComponentRegistry struct {
-	//endpoint组件
-	components map[string]Endpoint
-	sync.RWMutex
+	engine.RuleComponentRegistry
 }
 
-// Register 注册规则引擎节点组件
-func (r *ComponentRegistry) Register(endpoint Endpoint) error {
-	r.Lock()
-	defer r.Unlock()
-	if r.components == nil {
-		r.components = make(map[string]Endpoint)
-	}
-	if _, ok := r.components[endpoint.Type()]; ok {
-		return errors.New("the component already exists. type=" + endpoint.Type())
-	}
-	r.components[endpoint.Type()] = endpoint
-
-	return nil
+// Register adds a new endpoint component to the registry.
+func (r *ComponentRegistry) Register(component endpoint.Endpoint) error {
+	return r.RuleComponentRegistry.Register(component)
 }
 
-func (r *ComponentRegistry) Unregister(componentType string) error {
-	r.RLock()
-	defer r.RUnlock()
-	if _, ok := r.components[componentType]; ok {
-		delete(r.components, componentType)
-		return nil
-	} else {
-		return fmt.Errorf("component not found. type=%s", componentType)
+// New creates a new instance of an endpoint based on the component type.
+// The configuration parameter can be either types.Configuration or the corresponding Config type for the endpoint.
+func (r *ComponentRegistry) New(componentType string, ruleConfig types.Config, configuration interface{}) (endpoint.Endpoint, error) {
+	newNode, err := r.RuleComponentRegistry.NewNode(componentType)
+	if err != nil {
+		return nil, err
 	}
-}
 
-// New 创建一个新的endpoint实例
-func (r *ComponentRegistry) New(componentType string, ruleConfig types.Config, configuration interface{}) (Endpoint, error) {
-	r.RLock()
-	defer r.RUnlock()
-
-	if node, ok := r.components[componentType]; !ok {
-		return nil, fmt.Errorf("component not found. type=%s", componentType)
-	} else {
-		var err error
-		var config = make(types.Configuration)
-		if configuration != nil {
-			if c, ok := configuration.(types.Configuration); ok {
-				config = c
-			} else if err = maps.Map2Struct(configuration, config); err != nil {
-				return nil, err
-			}
+	var config = make(types.Configuration)
+	if configuration != nil {
+		if c, ok := configuration.(types.Configuration); ok {
+			config = c
+		} else if err = maps.Map2Struct(configuration, config); err != nil {
+			return nil, err
 		}
+	}
 
-		//创建新的实例
-		newNode := node.New()
-
-		if endpoint, ok := newNode.(Endpoint); ok {
-			if err = endpoint.Init(ruleConfig, config); err != nil {
-				return nil, err
-			} else {
-				return endpoint, nil
-			}
+	if ep, ok := newNode.(endpoint.Endpoint); ok {
+		if err = ep.Init(ruleConfig, config); err != nil {
+			return nil, err
 		} else {
-			return nil, fmt.Errorf("%s not type of Endpoint", componentType)
+			return ep, nil
 		}
+	} else {
+		return nil, fmt.Errorf("%s not type of Endpoint", componentType)
 	}
-}
-
-// New 创建指定类型的endpoint实例
-// componentType endpoint类型
-// ruleConfig rulego配置
-// configuration endpoint配置参数，可以是types.Configuration和endpoint对应Config的类型
-func New(componentType string, ruleConfig types.Config, configuration interface{}) (Endpoint, error) {
-	return Registry.New(componentType, ruleConfig, configuration)
 }

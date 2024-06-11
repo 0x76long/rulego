@@ -16,24 +16,24 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v4
         with:
-          go-version: '1.18.x'
+          go-version: '1.20.x'
           cache-dependency-path: go.sum
       - name: Install dependencies
         run: go get .
       - name: Build for Linux and Windows and Macos
         run: |
-          cd examples/server
-          go build -tags with_extend -v -o rulego-server-linux-amd64
-          GOOS=windows GOARCH=amd64 go build -tags with_extend -v -o rulego-server-windows-amd64.exe
-          GOOS=darwin GOARCH=amd64 go build -tags with_extend -v -o rulego-server-macos-amd64
+          cd examples/server/cmd/server
+          CGO_ENABLED=0 go build -tags with_extend -v -o rulego-server-linux-amd64
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -tags with_extend -v -o rulego-server-windows-amd64.exe
+          CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -tags with_extend -v -o rulego-server-macos-amd64
       - name: Upload artifacts
         uses: actions/upload-artifact@v3
         with:
           name: rulego-server-binaries
           path: |
-            examples/server/rulego-server-linux-amd64
-            examples/server/rulego-server-windows-amd64.exe
-            examples/server/rulego-server-macos-amd64
+            examples/server/cmd/server/rulego-server-linux-amd64
+            examples/server/cmd/server/rulego-server-windows-amd64.exe
+            examples/server/cmd/server/rulego-server-macos-amd64
 #      - name: Create Release
 #        uses: actions/create-release@v1
 #        env:

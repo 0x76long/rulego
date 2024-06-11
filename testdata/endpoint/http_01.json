@@ -1,0 +1,30 @@
+{
+    "id": "e1",
+    "type": "http",
+    "name": "http server",
+    "configuration": {
+      "server": ":9090"
+    },
+    "routers": [
+      {
+        "id":"r1",
+        "params": [
+          "post"
+        ],
+        "from": {
+          "path": "/api/v1/test/:chainId",
+          "configuration": {
+          }
+        },
+        "to": {
+          "path": "${chainId}",
+          "wait": true,
+          "processors": ["responseToBody"]
+        },
+        "additionalInfo": {
+          "aa":"aa"
+        }
+      }
+    ]
+
+}

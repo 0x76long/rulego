@@ -18,10 +18,12 @@ package net
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"github.com/rulego/rulego/api/types"
-	"github.com/rulego/rulego/endpoint"
+	"github.com/rulego/rulego/api/types/endpoint"
+	"github.com/rulego/rulego/endpoint/impl"
 	"github.com/rulego/rulego/test/assert"
 	"github.com/rulego/rulego/utils/maps"
 	"log"
@@ -42,9 +44,9 @@ const (
 )
 
 // 注册组件
-func init() {
-	_ = endpoint.Registry.Register(&Endpoint{})
-}
+//func init() {
+//	_ = endpoint.Registry.Register(&Endpoint{})
+//}
 
 // RequestMessage 请求消息
 type RequestMessage struct {
@@ -192,8 +194,10 @@ type Config struct {
 
 // RegexpRouter 正则表达式路由
 type RegexpRouter struct {
+	//路由ID
+	id string
 	//路由
-	router *endpoint.Router
+	router endpoint.Router
 	//正则表达式
 	regexp *regexp.Regexp
 }
@@ -202,7 +206,7 @@ type RegexpRouter struct {
 // 支持通过正则表达式把匹配的消息路由到指定路由
 type Endpoint struct {
 	// 嵌入endpoint.BaseEndpoint，继承其方法
-	endpoint.BaseEndpoint
+	impl.BaseEndpoint
 	// 配置
 	Config Config
 	// rulego配置
@@ -253,11 +257,11 @@ func (ep *Endpoint) Id() string {
 	return ep.Config.Server
 }
 
-func (ep *Endpoint) AddRouter(router *endpoint.Router, params ...interface{}) (string, error) {
+func (ep *Endpoint) AddRouter(router endpoint.Router, params ...interface{}) (string, error) {
 	if router == nil {
 		return "", errors.New("router can not nil")
 	} else {
-		expr := router.GetFrom().From
+		expr := router.GetFrom().ToString()
 		//允许空expr，表示匹配所有
 		var regexpV *regexp.Regexp
 		if expr != "" {
@@ -268,20 +272,22 @@ func (ep *Endpoint) AddRouter(router *endpoint.Router, params ...interface{}) (s
 				regexpV = re
 			}
 		}
+		if id := router.GetId(); id == "" {
+			router.SetId(router.GetFrom().ToString())
+		}
 		ep.Lock()
 		defer ep.Unlock()
 		if ep.routers == nil {
 			ep.routers = make(map[string]*RegexpRouter)
 		}
-		if _, ok := ep.routers[expr]; ok {
-			return expr, fmt.Errorf("duplicate router %s", expr)
+		if _, ok := ep.routers[router.GetId()]; ok {
+			return router.GetId(), fmt.Errorf("duplicate router %s", expr)
 		} else {
-			ep.routers[expr] = &RegexpRouter{
+			ep.routers[router.GetId()] = &RegexpRouter{
 				router: router,
 				regexp: regexpV,
 			}
-
-			return expr, nil
+			return router.GetId(), nil
 		}
 
 	}
@@ -291,7 +297,11 @@ func (ep *Endpoint) RemoveRouter(routerId string, params ...interface{}) error {
 	ep.Lock()
 	defer ep.Unlock()
 	if ep.routers != nil {
-		delete(ep.routers, routerId)
+		if _, ok := ep.routers[routerId]; ok {
+			delete(ep.routers, routerId)
+		} else {
+			return fmt.Errorf("router: %s not found", routerId)
+		}
 	}
 	return nil
 }
@@ -304,25 +314,30 @@ func (ep *Endpoint) Start() error {
 		return err
 	}
 	// 打印服务器启动的信息
-	ep.Printf("starting server on :%s", ep.Config.Server)
-	// 循环接受客户端的连接请求
-	for {
-		// 从监听器中获取一个客户端连接，返回连接对象和错误信息
-		conn, err := ep.listener.Accept()
-		if err != nil {
-			if opError, ok := err.(*net.OpError); ok && opError.Err == net.ErrClosed {
-				ep.Printf("net endpoint stop")
-				return endpoint.StopErr
-			} else {
-				ep.Printf("accept:", err)
-				continue
+	ep.Printf("started server on :%s", ep.Config.Server)
+	go func() {
+		// 循环接受客户端的连接请求
+		for {
+			// 从监听器中获取一个客户端连接，返回连接对象和错误信息
+			conn, err := ep.listener.Accept()
+			if err != nil {
+				if opError, ok := err.(*net.OpError); ok && opError.Err == net.ErrClosed {
+					ep.Printf("net endpoint stop")
+					return
+					//return endpoint.ErrServerStopped
+				} else {
+					ep.Printf("accept:", err)
+					continue
+				}
 			}
+			// 打印客户端连接的信息
+			ep.Printf("new connection from:", conn.RemoteAddr().String())
+			// 启动一个协端处理客户端连接
+			go ep.handler(conn)
 		}
-		// 打印客户端连接的信息
-		ep.Printf("new connection from:", conn.RemoteAddr().String())
-		// 启动一个协端处理客户端连接
-		go ep.handler(conn)
-	}
+		ep.listener.Close()
+	}()
+	return nil
 }
 
 func (ep *Endpoint) Printf(format string, v ...interface{}) {
@@ -418,7 +433,7 @@ func (x *ClientHandler) handler() {
 		// 匹配符合的路由，处理消息
 		for _, v := range x.endpoint.routers {
 			if v.regexp == nil || v.regexp.Match(data) {
-				x.endpoint.DoProcess(v.router, exchange)
+				x.endpoint.DoProcess(context.Background(), v.router, exchange)
 			}
 		}
 	}

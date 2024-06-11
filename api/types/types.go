@@ -34,6 +34,7 @@ const (
 const (
 	In  = "IN"
 	Out = "OUT"
+	Log = "Log"
 )
 
 // 脚本类型
@@ -125,6 +126,7 @@ type Node interface {
 // NodeCtx 规则节点实例化上下文
 type NodeCtx interface {
 	Node
+	Config() Config
 	//IsDebugMode 该节点是否是调试模式
 	//True:消息流入和流出该节点，会调用config.OnDebug回调函数，否则不会
 	IsDebugMode() bool
@@ -144,6 +146,11 @@ type NodeCtx interface {
 	DSL() []byte
 }
 
+type ChainCtx interface {
+	NodeCtx
+	Definition() *RuleChain
+}
+
 // RuleContext 规则引擎消息处理上下文接口
 // 处理把消息流转到下一个或者多个节点逻辑
 // 根据规则链连接关系查找当前节点的下一个或者多个节点，然后调用对应节点：nextNode.OnMsg(ctx, msg)触发下一个节点的业务逻辑
@@ -158,6 +165,8 @@ type RuleContext interface {
 	TellNext(msg RuleMsg, relationTypes ...string)
 	//TellSelf 以指定的延迟（毫秒）向当前节点发送消息。
 	TellSelf(msg RuleMsg, delayMs int64)
+	//TellNextOrElse 使用指定的relationTypes，把消息发送到下一个节点，如果对应的relationType找不到下一个节点，使用defaultRelationType查找
+	TellNextOrElse(msg RuleMsg, defaultRelationType string, relationTypes ...string)
 	//TellFlow 执行子规则链
 	//ruleChainId 规则链ID
 	//onEndFunc 子规则链链分支执行完的回调，并返回该链执行结果，如果同时触发多个分支链，则会调用多次
@@ -193,6 +202,12 @@ type RuleContext interface {
 	ExecuteNode(chanCtx context.Context, nodeId string, msg RuleMsg, skipTellNext bool, onEnd OnEndFunc)
 	//DoOnEnd 触发 OnEnd 回调函数
 	DoOnEnd(msg RuleMsg, err error, relationType string)
+	//SetCallbackFunc 设置回调函数
+	SetCallbackFunc(functionName string, f interface{})
+	//GetCallbackFunc 获取回调函数
+	GetCallbackFunc(functionName string) interface{}
+	//OnDebug 调用配置的OnDebug回调函数
+	OnDebug(ruleChainId string, flowType string, nodeId string, msg RuleMsg, relationType string, err error)
 }
 
 // RuleContextOption 修改RuleContext选项的函数
@@ -200,6 +215,8 @@ type RuleContextOption func(RuleContext)
 
 // WithEndFunc 规则链分支链执行完回调函数
 // 注意：如果规则链有多个结束点，回调函数则会执行多次
+// Deprecated
+// 使用`types.WithOnEnd`代替
 func WithEndFunc(endFunc func(ctx RuleContext, msg RuleMsg, err error)) RuleContextOption {
 	return func(rc RuleContext) {
 		rc.SetEndFunc(func(ctx RuleContext, msg RuleMsg, err error, relationType string) {
@@ -232,6 +249,27 @@ func WithOnAllNodeCompleted(onAllNodeCompleted func()) RuleContextOption {
 	}
 }
 
+// WithOnRuleChainCompleted 规则链执行完回调函数，并收集每个节点的运行日志
+func WithOnRuleChainCompleted(onCallback func(ctx RuleContext, snapshot RuleChainRunSnapshot)) RuleContextOption {
+	return func(rc RuleContext) {
+		rc.SetCallbackFunc(CallbackFuncOnRuleChainCompleted, onCallback)
+	}
+}
+
+// WithOnNodeCompleted 节点执行完回调函数，并收集节点的运行日志
+func WithOnNodeCompleted(onCallback func(ctx RuleContext, nodeRunLog RuleNodeRunLog)) RuleContextOption {
+	return func(rc RuleContext) {
+		rc.SetCallbackFunc(CallbackFuncOnNodeCompleted, onCallback)
+	}
+}
+
+// WithOnNodeDebug 节点调试日志回调函数，实时异步调用，必须节点配置开启debugMode才会触发
+func WithOnNodeDebug(onDebug func(ruleChainId string, flowType string, nodeId string, msg RuleMsg, relationType string, err error)) RuleContextOption {
+	return func(rc RuleContext) {
+		rc.SetCallbackFunc(CallbackFuncDebug, onDebug)
+	}
+}
+
 // JsEngine JavaScript脚本引擎
 type JsEngine interface {
 	//Execute 执行js脚本指定函数，js脚本在JsEngine实例化的时候进行初始化
@@ -248,10 +286,10 @@ type JsEngine interface {
 type Parser interface {
 	// DecodeRuleChain 从描述文件解析规则链结构体
 	//parses a chain from an input source.
-	DecodeRuleChain(config Config, dsl []byte) (Node, error)
+	DecodeRuleChain(config Config, aspects AspectList, dsl []byte) (Node, error)
 	// DecodeRuleNode 从描述文件解析规则节点结构体
 	//parses a node from an input source.
-	DecodeRuleNode(config Config, dsl []byte) (Node, error)
+	DecodeRuleNode(config Config, dsl []byte, chainCtx Node) (Node, error)
 	//EncodeRuleChain 把规则链结构体转换成描述文件
 	EncodeRuleChain(def interface{}) ([]byte, error)
 	//EncodeRuleNode 把规则节点结构体转换成描述文件
