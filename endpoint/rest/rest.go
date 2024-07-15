@@ -39,15 +39,10 @@ const (
 )
 
 // Type 组件类型
-const Type = "http"
+const Type = types.EndpointTypePrefix + "http"
 
 // Endpoint 别名
 type Endpoint = Rest
-
-// 注册组件
-//func init() {
-//	_ = endpoint.Registry.Register(&Endpoint{})
-//}
 
 // RequestMessage http请求消息
 type RequestMessage struct {
@@ -221,7 +216,11 @@ func (rest *Rest) Type() string {
 }
 
 func (rest *Rest) New() types.Node {
-	return &Rest{}
+	return &Rest{
+		Config: Config{
+			Server: ":6333",
+		},
+	}
 }
 
 // Init 初始化

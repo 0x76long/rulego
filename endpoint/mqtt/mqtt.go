@@ -32,15 +32,10 @@ import (
 )
 
 // Type 组件类型
-const Type = "mqtt"
+const Type = types.EndpointTypePrefix + "mqtt"
 
 // Endpoint 别名
 type Endpoint = Mqtt
-
-//// 注册组件
-//func init() {
-//	_ = endpoint.Registry.Register(&Endpoint{})
-//}
 
 // RequestMessage http请求消息
 type RequestMessage struct {
@@ -203,7 +198,9 @@ func (m *Mqtt) Type() string {
 }
 
 func (m *Mqtt) New() types.Node {
-	return &Mqtt{}
+	return &Mqtt{Config: mqtt.Config{
+		Server: "127.0.0.1:1883",
+	}}
 }
 
 // Init 初始化
@@ -233,10 +230,7 @@ func (m *Mqtt) AddRouter(router endpoint.Router, params ...interface{}) (string,
 	if router == nil {
 		return "", errors.New("router can not nil")
 	}
-
-	if id := router.GetId(); id == "" {
-		router.SetId(router.GetFrom().ToString())
-	}
+	m.CheckAndSetRouterId(router)
 	m.saveRouter(router)
 	//服务已经启动
 	if m.client != nil {

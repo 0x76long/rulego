@@ -26,47 +26,65 @@ const (
 	defaultNodeIdPrefix = "node"
 )
 
-// RuleNodeCtx 节点组件实例定义
+// RuleNodeCtx defines an instance of a node component within the rule engine.
 type RuleNodeCtx struct {
-	//组件实例
+	// Node is the instance of the component.
 	types.Node
-	//规则链配置上下文
+	// ChainCtx is the context of the rule chain configuration.
 	ChainCtx *RuleChainCtx
-	//组件配置
+	// SelfDefinition is the configuration of the component itself.
 	SelfDefinition *types.RuleNode
-	//规则引擎配置
+	// config is the configuration of the rule engine.
 	config types.Config
+	// aspects is a list of AOP (Aspect-Oriented Programming) aspects.
+	aspects types.AspectList
 }
 
-// InitRuleNodeCtx 初始化RuleNodeCtx
-func InitRuleNodeCtx(config types.Config, chainCtx *RuleChainCtx, selfDefinition *types.RuleNode) (*RuleNodeCtx, error) {
+// InitRuleNodeCtx initializes a RuleNodeCtx with the given configuration, chain context, and self-definition.
+// It attempts to create a new node based on the type defined in selfDefinition.
+func InitRuleNodeCtx(config types.Config, chainCtx *RuleChainCtx, aspects types.AspectList, selfDefinition *types.RuleNode) (*RuleNodeCtx, error) {
+	// Retrieve aspects for the engine.
+	_, nodeBeforeInitAspects, _, _, _ := aspects.GetEngineAspects()
+	// Iterate over the nodeBeforeInitAspects and call OnNodeBeforeInit on each aspect.
+	for _, aspect := range nodeBeforeInitAspects {
+		if err := aspect.OnNodeBeforeInit(selfDefinition); err != nil {
+			return nil, err
+		}
+	}
+	// Attempt to create a new node from the components registry using the type specified in selfDefinition.
 	node, err := config.ComponentsRegistry.NewNode(selfDefinition.Type)
 	if err != nil {
+		// If there is an error in creating the node, return a RuleNodeCtx with the provided context and definition.
 		return &RuleNodeCtx{
 			ChainCtx:       chainCtx,
 			SelfDefinition: selfDefinition,
 			config:         config,
+			aspects:        aspects,
 		}, err
 	} else {
+		// If selfDefinition.Configuration is nil, initialize it as an empty configuration.
 		if selfDefinition.Configuration == nil {
 			selfDefinition.Configuration = make(types.Configuration)
 		}
+		// Process variables within the configuration.
 		configuration, err := processVariables(config, chainCtx, selfDefinition.Configuration)
 		if err != nil {
 			return &RuleNodeCtx{}, err
 		}
+		// Initialize the node with the processed configuration.
 		if err = node.Init(config, configuration); err != nil {
 			return &RuleNodeCtx{}, err
 		} else {
+			// Return a RuleNodeCtx with the initialized node and provided context and definition.
 			return &RuleNodeCtx{
 				Node:           node,
 				ChainCtx:       chainCtx,
 				SelfDefinition: selfDefinition,
 				config:         config,
+				aspects:        aspects,
 			}, nil
 		}
 	}
-
 }
 
 func (rn *RuleNodeCtx) Config() types.Config {
@@ -109,6 +127,8 @@ func (rn *RuleNodeCtx) DSL() []byte {
 // Copy 复制
 func (rn *RuleNodeCtx) Copy(newCtx *RuleNodeCtx) {
 	rn.Node = newCtx.Node
+	rn.config = newCtx.config
+	rn.aspects = newCtx.aspects
 
 	rn.SelfDefinition.AdditionalInfo = newCtx.SelfDefinition.AdditionalInfo
 	rn.SelfDefinition.Name = newCtx.SelfDefinition.Name

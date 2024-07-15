@@ -37,15 +37,10 @@ import (
 )
 
 // Type 组件类型
-const Type = "ws"
+const Type = types.EndpointTypePrefix + "ws"
 
 // Endpoint 别名
 type Endpoint = Websocket
-
-// 注册组件
-//func init() {
-//	_ = endpoint.Registry.Register(&Endpoint{})
-//}
 
 // RequestMessage websocket请求消息
 type RequestMessage struct {
@@ -227,7 +222,11 @@ func (ws *Websocket) Type() string {
 }
 
 func (ws *Websocket) New() types.Node {
-	return &Websocket{}
+	return &Websocket{
+		Config: Config{
+			Server: ":6334",
+		},
+	}
 }
 
 // Init 初始化
@@ -349,9 +348,7 @@ func (ws *Websocket) addRouter(routers ...endpoint.Router) *Websocket {
 		ws.RouterStorage = make(map[string]endpoint.Router)
 	}
 	for _, item := range routers {
-		if id := item.GetId(); id == "" {
-			item.SetId(item.GetFrom().ToString())
-		}
+		ws.CheckAndSetRouterId(item)
 		//存储路由
 		ws.RouterStorage[item.GetId()] = item
 		//添加到http路由器

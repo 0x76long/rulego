@@ -14,19 +14,24 @@
  * limitations under the License.
  */
 
-package types
+package funcs
 
-const (
-	CallbackFuncOnRuleChainCompleted = "onRuleChainCompleted"
-	CallbackFuncOnNodeCompleted      = "onNodeCompleted"
-	CallbackFuncDebug                = "onDebug"
+import (
+	"strings"
+	"text/template"
 )
 
-const (
-	Global  = "global"
-	Vars    = "vars"
-	Secrets = "secrets"
-)
-const (
-	EndpointTypePrefix = "endpoint/"
-)
+var TemplateFuncMap = template.FuncMap{}
+
+func init() {
+	TemplateFuncMap["escape"] = func(s string) string {
+		var replacer = strings.NewReplacer(
+			"\\", "\\\\", // 反斜杠
+			"\"", "\\\"", // 双引号
+			"\n", "\\n", // 换行符
+			"\r", "\\r", // 回车符
+			"\t", "\\t", // 制表符
+		)
+		return replacer.Replace(s)
+	}
+}

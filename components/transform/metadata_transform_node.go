@@ -19,8 +19,8 @@ package transform
 //规则链节点配置示例：
 //{
 //	"id": "s1",
-//	"type": "exprTransform",
-//	"name": "表达式转换",
+//	"type": "metadataTransform",
+//	"name": "元数据转换",
 //	"debugMode": false,
 //		"configuration": {
 //			"mapping": {
@@ -38,26 +38,24 @@ import (
 	"github.com/rulego/rulego/components"
 	"github.com/rulego/rulego/utils/maps"
 	"github.com/rulego/rulego/utils/str"
-	"strings"
 )
 
 func init() {
-	Registry.Add(&ExprTransformNode{})
+	Registry.Add(&MetadataTransformNode{})
 }
 
-// ExprTransformNodeConfiguration 节点配置
-type ExprTransformNodeConfiguration struct {
-	//转换表达式，转换结果替换到msg 转到下一个节点。
-	Expr string
-	//多个字段转换表达式，格式(字段:转换表达式)，多个转换结果转换成json字符串转到下一个节点。如果Mapping和Expr同时存在，优先使用Expr
+// MetadataTransformNodeConfiguration 节点配置
+type MetadataTransformNodeConfiguration struct {
+	//多个字段转换表达式，格式(字段:转换表达式)
 	Mapping map[string]string
+	// 是否创建新的元数据列表
+	// true:创建新的元数据列表，false:更新对应的元数据key
+	IsNew bool
 }
 
-// ExprTransformNode 使用expr表达式转换或者创建新的msg
-// 如果config.Expr有值，则把转换结果替换到msg 转到下一个节点
-// 如果config.Mapping有值，则把多个字段转换结果转换成json替换到msg 转到下一个节点
-// 如果Mapping和Expr同时存在，优先使用config.Expr
-// 多个字段转换msg结构如下：
+// MetadataTransformNode 使用expr表达式转换或者创建新的元数据
+// 则把多个字段转换结果替换元数据对应key（如果isNew=true，则创建新的元数据结构体），转到下一个节点
+// 转换结构如下：
 //
 //	{
 //	  fieldKey1:fieldValue1
@@ -81,86 +79,70 @@ type ExprTransformNodeConfiguration struct {
 // 通过`metadata`变量访问消息元数据。例如 `metadata.customerName`
 // 通过`type`变量访问消息类型
 // 通过`dataType`变量访问数据类型
-type ExprTransformNode struct {
+type MetadataTransformNode struct {
 	//节点配置
-	Config         ExprTransformNodeConfiguration
-	program        *vm.Program
+	Config         MetadataTransformNodeConfiguration
 	programMapping map[string]*vm.Program
 }
 
 // Type 组件类型
-func (x *ExprTransformNode) Type() string {
-	return "exprTransform"
+func (x *MetadataTransformNode) Type() string {
+	return "metadataTransform"
 }
 
-func (x *ExprTransformNode) New() types.Node {
-	return &ExprTransformNode{Config: ExprTransformNodeConfiguration{}}
+func (x *MetadataTransformNode) New() types.Node {
+	return &MetadataTransformNode{Config: MetadataTransformNodeConfiguration{
+		Mapping: map[string]string{
+			"temperature": "msg.temperature",
+		},
+	}}
 }
 
 // Init 初始化
-func (x *ExprTransformNode) Init(ruleConfig types.Config, configuration types.Configuration) error {
+func (x *MetadataTransformNode) Init(_ types.Config, configuration types.Configuration) error {
+	//删除默认配置
+	x.Config.Mapping = map[string]string{}
 	err := maps.Map2Struct(configuration, &x.Config)
 	if err == nil {
-		if exprV := strings.TrimSpace(x.Config.Expr); exprV != "" {
-			if program, err := expr.Compile(exprV, expr.AllowUndefinedVariables()); err != nil {
+		x.programMapping = make(map[string]*vm.Program)
+		for k, v := range x.Config.Mapping {
+			if program, err := expr.Compile(v, expr.AllowUndefinedVariables()); err != nil {
 				return err
 			} else {
-				x.program = program
-			}
-		} else {
-			x.programMapping = make(map[string]*vm.Program)
-			for k, v := range x.Config.Mapping {
-				if program, err := expr.Compile(v, expr.AllowUndefinedVariables()); err != nil {
-					return err
-				} else {
-					x.programMapping[k] = program
-				}
+				x.programMapping[k] = program
 			}
 		}
-
 	}
 	return err
 }
 
 // OnMsg 处理消息
-func (x *ExprTransformNode) OnMsg(ctx types.RuleContext, msg types.RuleMsg) {
+func (x *MetadataTransformNode) OnMsg(ctx types.RuleContext, msg types.RuleMsg) {
 	evn, err := components.NodeUtils.GetEvn(ctx, msg)
 	if err != nil {
 		ctx.TellFailure(msg, err)
 		return
 	}
-	var result interface{}
 	var exprVm = vm.VM{}
-	if x.program != nil {
-		if out, err := exprVm.Run(x.program, evn); err != nil {
+	mapResult := make(map[string]string)
+	for fieldName, program := range x.programMapping {
+		if out, err := exprVm.Run(program, evn); err != nil {
 			ctx.TellFailure(msg, err)
 			return
 		} else {
-			result = out
+			mapResult[fieldName] = str.ToString(out)
 		}
+	}
+	if x.Config.IsNew {
+		msg.Metadata = mapResult
 	} else {
-		mapResult := make(map[string]interface{})
-		for fieldName, program := range x.programMapping {
-			if out, err := exprVm.Run(program, evn); err != nil {
-				ctx.TellFailure(msg, err)
-				return
-			} else {
-				mapResult[fieldName] = out
-			}
+		for k, v := range mapResult {
+			msg.Metadata[k] = v
 		}
-		result = mapResult
-		msg.DataType = types.JSON
 	}
-
-	if newValue, err := str.ToStringMaybeErr(result); err == nil {
-		msg.Data = newValue
-		ctx.TellSuccess(msg)
-	} else {
-		ctx.TellFailure(msg, err)
-	}
-
+	ctx.TellSuccess(msg)
 }
 
 // Destroy 销毁
-func (x *ExprTransformNode) Destroy() {
+func (x *MetadataTransformNode) Destroy() {
 }

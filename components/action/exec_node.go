@@ -3,41 +3,43 @@ package action
 import (
 	"bytes"
 	"errors"
-	"examples/server/internal/constants"
-	"fmt"
-	"github.com/rulego/rulego"
 	"github.com/rulego/rulego/api/types"
 	"github.com/rulego/rulego/utils/maps"
 	"github.com/rulego/rulego/utils/str"
 	"io"
 	"os/exec"
-	"regexp"
 	"strings"
 )
 
 // ErrCmdNotAllowed 不允许执行的命令
 var ErrCmdNotAllowed = errors.New("cmd not allowed error")
 
-// KeyExecCommandNodeWhitelist 节点白名单配置
-const KeyExecCommandNodeWhitelist = "execCommandNodeWhitelist"
+const (
+	// KeyExecNodeWhitelist ExecCommandNode node whitelist list
+	KeyExecNodeWhitelist = "execNodeWhitelist"
+	//KeyWorkDir cmd working directory
+	KeyWorkDir = "workDir"
+)
 
 func init() {
-	rulego.Registry.Register(&ExecCommandNode{})
+	Registry.Add(&ExecCommandNode{})
 }
 
 // ExecCommandNodeConfiguration 节点配置
 type ExecCommandNodeConfiguration struct {
-	// Command 执行的命令
-	Command string
+	// Cmd 执行的命令
+	Cmd string
 	// Args 命令参数
 	Args []string
-	// Log 是否打印标准输出
+	// Log 是否打印标准输出。true:命令标准输出会触发OnDebug函数输出
 	Log bool
-	//是否把输出输出到下一个节点
+	//是否把标准输出到下一个节点
 	ReplaceData bool
 }
 
-// ExecCommandNode 实现命令执行
+// ExecCommandNode 执行本地命令，在白名单的命令才允许执行，通过config.Properties `key=execNodeWhitelist`，设置白名单，多个与`,`隔开
+// 示例：config.Properties.PutValue(KeyExecNodeWhitelist,"cd,ls,go")
+// 允许通过上一个节点通过元数据`key=workDir`，设置命令的执行目录，如：Metadata.PutValue("workDir","./data")
 type ExecCommandNode struct {
 	// 节点配置
 	Config ExecCommandNodeConfiguration
@@ -47,7 +49,7 @@ type ExecCommandNode struct {
 
 // Type 组件类型
 func (x *ExecCommandNode) Type() string {
-	return "ci/exec"
+	return "exec"
 }
 
 func (x *ExecCommandNode) New() types.Node {
@@ -59,7 +61,7 @@ func (x *ExecCommandNode) Init(ruleConfig types.Config, configuration types.Conf
 	if err := maps.Map2Struct(configuration, &x.Config); err != nil {
 		return err
 	}
-	x.CommandWhitelist = strings.Split(ruleConfig.Properties.GetValue(KeyExecCommandNodeWhitelist), ",")
+	x.CommandWhitelist = strings.Split(ruleConfig.Properties.GetValue(KeyExecNodeWhitelist), ",")
 	return nil
 }
 
@@ -71,7 +73,7 @@ func (x *ExecCommandNode) OnMsg(ctx types.RuleContext, msg types.RuleMsg) {
 	metadataCopy.PutValue("msg.type", msg.Type)
 
 	// 替换命令中的占位符
-	command := str.SprintfDict(x.Config.Command, metadataCopy.Values())
+	command := str.SprintfDict(x.Config.Cmd, metadataCopy.Values())
 
 	// 检查命令是否在白名单中
 	if !isCommandWhitelisted(command, x.CommandWhitelist) {
@@ -95,7 +97,7 @@ func (x *ExecCommandNode) OnMsg(ctx types.RuleContext, msg types.RuleMsg) {
 	// 执行命令
 	cmd := exec.Command(command, args...)
 	// 设置命令的工作目录
-	cmd.Dir = msg.Metadata.GetValue(constants.KeyWorkDir)
+	cmd.Dir = msg.Metadata.GetValue(KeyWorkDir)
 	var stdoutBuf, stderrBuf bytes.Buffer
 	if x.Config.Log {
 		x.printLog(ctx, msg, cmd, &stdoutBuf, &stderrBuf)
@@ -137,14 +139,12 @@ func (x *ExecCommandNode) printLog(ctx types.RuleContext, msg types.RuleMsg, cmd
 		msg:          msgCopy,
 		relationType: "info",
 		chainId:      chainId,
-		//buf:          bufOut,
 	}
 	errWriter := &OnDebugWriter{
 		ctx:          ctx,
 		msg:          msgCopy,
 		relationType: "error",
 		chainId:      chainId,
-		//buf:          bufErr,
 	}
 	// 将命令的输出重定向到 DebugWriter
 	cmd.Stdout = io.MultiWriter(bufOut, debugWriter)
@@ -169,55 +169,10 @@ type OnDebugWriter struct {
 }
 
 func (w *OnDebugWriter) Write(p []byte) (n int, err error) {
-
 	// 将接收到的数据转换为字符串
 	w.msg.Data = string(p)
-	//w.buf.WriteString(w.msg.Data)
 	// 调用 OnDebug 方法来记录日志
-	w.ctx.Config().OnDebug(w.chainId, types.Log, w.ctx.Self().GetNodeId().Id, w.msg, w.relationType, nil)
+	w.ctx.Config().OnDebug(w.chainId, types.Log, w.ctx.GetSelfId(), w.msg, w.relationType, nil)
 	// 返回写入的字节数和nil错误
 	return len(p), nil
-}
-
-// ansiToHTML 函数将ANSI颜色代码转换为HTML颜色代码
-func ansiToHTML(text string) string {
-	// 正则表达式匹配ANSI颜色代码
-	ansiRegex := regexp.MustCompile(`\x1B\[\d+(;\d+)*m`)
-	// 将文本分割为ANSI代码和普通文本
-	parts := ansiRegex.Split(text, -1)
-	var html strings.Builder
-
-	for i, part := range parts {
-		if i%2 == 0 {
-			// 普通文本部分
-			html.WriteString(part)
-		} else {
-			// ANSI代码部分
-			code := part[2:] // 忽略前两个字符"\x1B["
-			color, _ := parseAnsiColorCode(code)
-			if color != "" {
-				html.WriteString(fmt.Sprintf(`<span style="color: %s">`, color))
-				html.WriteString(parts[i+1])
-				html.WriteString(`</span>`)
-			}
-		}
-	}
-
-	return html.String()
-}
-
-// parseAnsiColorCode 函数解析ANSI颜色代码并返回相应的CSS颜色值
-func parseAnsiColorCode(code string) (string, error) {
-	// 根据ANSI代码解析颜色（这里只是一个简单的映射示例，实际需要更复杂的逻辑）
-	colorMap := map[string]string{
-		"31": "red",
-		"32": "green",
-		"33": "yellow",
-		// 根据需要添加更多颜色映射...
-	}
-
-	if color, ok := colorMap[code]; ok {
-		return color, nil
-	}
-	return "", fmt.Errorf("unsupported ansi color code: %s", code)
 }

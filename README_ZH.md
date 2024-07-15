@@ -5,12 +5,13 @@
 [![codecov](https://codecov.io/gh/rulego/rulego/graph/badge.svg?token=G6XCGY7KVN)](https://codecov.io/gh/rulego/rulego)
 [![test](https://github.com/rulego/rulego/workflows/test/badge.svg)](https://github.com/rulego/rulego/actions/workflows/test.yml)
 [![build](https://github.com/rulego/rulego/workflows/build/badge.svg)](https://github.com/rulego/rulego/actions/workflows/build.yml)
+[![QQ交流群-720103251](https://img.shields.io/badge/QQ交流群-720103251-orange)](https://qm.qq.com/q/8RDaYcOry8)
 
 [English](README.md)| 中文
 
 <img src="doc/imgs/logo.png" width="100">  
 
-`RuleGo`是一个基于`Go`语言的轻量级、高性能、嵌入式、可编排组件式的规则引擎。也一个灵活配置和高度定制化的事件处理框架。支持异构系统数据集成，可以对输入消息进行聚合、分发、过滤、转换、丰富和执行各种动作。
+`RuleGo`是一个基于`Go`语言的轻量级、高性能、嵌入式、可编排组件式的规则引擎。支持异构系统数据集成，可以对输入消息进行聚合、分发、过滤、转换、丰富和执行各种动作。
 
 <h3>您的鼓励是我们前进的动力。如果这个项目对您有帮助，请右上角点个Star吧。</h3>
 
@@ -22,7 +23,7 @@
 
 * **轻量级：** 无外部中间件依赖，在低成本设备中也能高效对数据进行处理和联动，适用于物联网边缘计算。
 * **高性能：** 得益于`Go`的高性能特性，另外`RuleGo`采用协程池和对象池等技术。
-* **嵌入式：** 支持把`RuleGo`嵌入到现有项目，非入侵式利用其特性。
+* **双模式：** 嵌入式和独立部署模式，支持把`RuleGo`嵌入到现有应用中，作为一个内部组件运行。也可以作为中间件独立部署，提供规则引擎以及编排服务。
 * **组件化：** 所有业务逻辑都是组件，并能灵活配置和重用它们。
 * **规则链：** 可以灵活地组合和重用不同的组件，实现高度定制化和可扩展性的业务流程。
 * **流程编排：** 支持对规则链组件进行动态编排，不重启应用情况下，替换或者新增业务逻辑。
@@ -33,6 +34,7 @@
   等组件。可以自行扩展其他组件。
 * **上下文隔离机制：** 可靠的上下文隔离机制，无需担心高并发情况下的数据串流。
 * **AOP机制：** 允许在不修改规则链或节点的原有逻辑的情况下，对规则链的执行添加额外的行为，或者直接替换原规则链或者节点逻辑。
+* **数据集成：** 允许动态配置Endpoint，例如：`HTTP Endpoint`，`MQTT Endpoint`，`TCP/UDP Endpoint`，`UDP Endpoint`，`Kafka Endpoint`，`Schedule Endpoint`等。
 
 ## 使用场景
 
@@ -41,14 +43,15 @@
 - 如果你的系统业务复杂，并且代码臃肿不堪       
 - 如果你的业务场景高度定制化或者经常变动     
 - 如果你的系统需要对接大量的第三方应用或者协议
-- 或者需要端对端的物联网解决方案          
+- 或者需要端对端的物联网解决方案    
+- 或者边缘计算场景
 - 或者需要对异构系统数据集中处理      
 - 或者你想尝试在`Go`语言实现热部署......             
 那`RuleGo`框架会是一个非常好的解决方案。      
 
 #### 典型使用场景
 
-* **边缘计算：** 可以在边缘服务器部署`RuleGo`，对数据进行预处理，筛选、聚合或者计算后再上报到云端。数据的处理规则和分发规则可以通过规则链动态配置和修改，而不需要重启系统。
+* **边缘计算：** 可以在边缘服务器部署`RuleGo`，对数据进行预处理，筛选、聚合或者计算后再上报到云端。数据的处理规则和分发规则可以通过规则链动态配置和修改，而不需要重启系统。类似`node-red`系统
 * **物联网：** 收集设备数据上报，经过规则链的规则判断，触发一个或者多个动作，例如：发邮件、发告警、和其他设备或者系统联动。
 * **数据分发：** 可以根据不同的消息类型，调用HTTP、MQTT或者gRPC把数据分发到不同系统。
 * **应用集成：** 把`RuleGo`当做胶水连接各种系统或者协议，例如：ssh、webhook、kafka、消息队列、数据库、chatGPT、第三方应用系统。
@@ -57,13 +60,19 @@
 * **复杂业务编排：** 把业务封装成自定义组件，通过`RuleGo`编排和驱动这些自定义的组件，业务逻辑并支持动态调整和替换。
 * **微服务编排：** 通过`RuleGo`编排和驱动微服务，或者动态调用第三方服务处理业务，并返回结果。
 * **业务代码和业务逻辑解耦：** 例如：用户积分计算系统、风控系统。
-* **自动化：** 例如：流程自动化系统、营销自动化系统、对接`大模型`提取用户意图，然后触发规则链与其他系统进行联动或者进行业务处理。
-* **灵活配置和高度定制化的事件处理框架：** 对不同的消息类型，进行异步或者同步的处理。
+* **自动化：** 例如：CI/CD系统、流程自动化系统、营销自动化系统。
+* **低代码：** 例如：低代码平台、iPaaS系统、ETL、类LangFlow系统（对接大模型提取用户意图，然后触发规则链与其他系统进行联动或者进行业务处理）。
 
 ## 架构图
 
 <img src="doc/imgs/architecture_zh.png" width="100%">  
 <p align="center">RuleGo架构图</p>
+
+## 规则链运行示例图
+
+  <img src="doc/imgs/rulechain/demo.png" style="height:40%;width:100%;"/>
+
+[更多运行模式](http://8.134.32.225:9090/ui/)
 
 ## 安装
 
@@ -73,13 +82,27 @@
 go get github.com/rulego/rulego
 ```
 
+或者使用gitee/gitcode源
+```bash
+go get gitee.com/rulego/rulego
+#or 
+go get gitcode.com/rulego/rulego
+
+如果遇到无法下载，在go.mod文件增加以下指令：
+replace github.com/rulego/rulego => gitee.com/rulego/rulego version
+replace gitee.com/rulego/rulego => github.com/rulego/rulego version
+#or
+replace github.com/rulego/rulego => gitcode.com/rulego/rulego version
+replace gitcode.com/rulego/rulego => github.com/rulego/rulego version
+```
 ## 使用
 
-首先使用Json格式定义规则链。规则链的定义不需要学习特定的规则语法或者DSL，只要配置组件，并把他们通过一定的关系连接起来，即可实现你的功能需求。规则链定义：[参考规则链](https://rulego.cc/pages/6f46fc/)
+RuleGo 使用极其简单和轻量级。只需以下3步：
 
-RuleGo 使用极其简单和轻量级。只需以下2步：
+1. 使用JSON定义规则链：
+[规则链DSL](https://rulego.cc/pages/10e1c0/)
 
-1. 导入`RuleGo`包，并使用规则链定义，创建一个规则引擎实例：
+2. 导入`RuleGo`包，并使用规则链定义，创建一个规则引擎实例：
 
 ```go
 import "github.com/rulego/rulego"
@@ -88,7 +111,7 @@ import "github.com/rulego/rulego"
 ruleEngine, err := rulego.New("rule01", []byte(ruleFile))
 ```
 
-2. 把消息负荷、消息类型、消息元数据交给规则引擎实例处理，然后规则引擎就会根据规则链的定义处理消息：
+3. 把消息负荷、消息类型、消息元数据交给规则引擎实例处理，然后规则引擎就会根据规则链的定义处理消息：
 
 ```go
 //定义消息元数据
@@ -99,7 +122,6 @@ msg := types.NewMsg(0, "TELEMETRY_MSG", types.JSON, metaData, "{\"temperature\":
 
 //把消息交给规则引擎处理
 ruleEngine.OnMsg(msg)
-
 ```
 
 ### 规则引擎管理API
@@ -113,7 +135,6 @@ err := ruleEngine.ReloadSelf([]byte(ruleFile))
 ruleEngine.ReloadChild("rule_chain_test", nodeFile)
 //获取规则链定义
 ruleEngine.DSL()
-
 ```
 
 规则引擎实例管理：
@@ -141,109 +162,23 @@ config.OnDebug = func (chainId,flowType string, nodeId string, msg types.RuleMsg
 //使用配置
 ruleEngine, err := rulego.New("rule01", []byte(ruleFile), rulego.WithConfig(config))
 ```
+### 规则链定义DSL
+[规则链定义DSL](https://rulego.cc/pages/10e1c0/)
 
-### 更多例子
-
-- 独立运行的示例工程：[server](examples/server)
-- 更多示例：[examples](examples)
-
-## 关于规则链
-
-### 规则节点
-
-[规则节点](https://rulego.cc/pages/83cba1/) 是规则链的基本组件，它是一个实现了特定业务逻辑的函数。规则节点可以对传入的消息进行过滤、转换、丰富或执行某些动作。规则节点可以通过配置参数来调整其行为和输出。
-你可以把业务很方便地封装成`RuleGo`节点组件，然后灵活配置和复用它们，像搭积木一样实现你的业务需求。 
-
-- 自定义节点组件：[examples/custom_component](examples/custom_component) 或者[文档](https://rulego.cc/pages/caed1b/) 
-- `go plugin`方式提供自定义组件：[examples/plugin](examples/custom_component) 或者[文档](https://rulego.cc/pages/caed1b/#go-plugin-%E6%96%B9%E5%BC%8F%E6%8F%90%E4%BE%9B%E7%BB%84%E4%BB%B6)
-- `RuleGo`内置大量[标准组件](https://rulego.cc/pages/88fc3c/) ，另外提供[扩展组件](https://rulego.cc/pages/d7fc43/)
-
-### 规则链
-
-[规则链](https://rulego.cc/pages/6f46fc/) 是 RuleGo 的核心概念，它是由多个规则节点组成的有向无环图，每个规则节点都是一个组件，可以实现不同的业务逻辑，节点与节点通过关系类型（relation type）进行连接。规则链可以动态配置和修改，支持嵌套和编排，实现复杂的业务流程。
-
-以下例子定义3个规则节点，分别是对数据进行过滤->转换->推送，规则链逻辑如下图：
-
-<img src="doc/imgs/rulechain/img_1.png" style="height:50%;width:80%;"/>
-
-规则链定义：
-```json
-{
-  "ruleChain": {
-    "name": "测试规则链",
-    "root": true
-  },
-  "metadata": {
-    "nodes": [
-      {
-        "id": "s1",
-        "type": "jsFilter",
-        "name": "过滤",
-        "debugMode": true,
-        "configuration": {
-          "jsScript": "return msg!='bb';"
-        }
-      },
-      {
-        "id": "s2",
-        "type": "jsTransform",
-        "name": "转换",
-        "debugMode": true,
-        "configuration": {
-          "jsScript": "metadata['test']='test02';\n metadata['index']=50;\n msgType='TEST_MSG_TYPE2';\n var msg2=JSON.parse(msg);\n msg2['aa']=66;\n return {'msg':msg2,'metadata':metadata,'msgType':msgType};"
-        }
-      },
-      {
-        "id": "s3",
-        "type": "restApiCall",
-        "name": "推送数据",
-        "debugMode": true,
-        "configuration": {
-          "restEndpointUrlPattern": "http://192.168.216.21:9099/api/socket/msg",
-          "requestMethod": "POST",
-          "maxParallelRequestsCount": 200
-        }
-      }
-    ],
-    "connections": [
-      {
-        "fromId": "s1",
-        "toId": "s2",
-        "type": "True"
-      },
-      {
-        "fromId": "s2",
-        "toId": "s3",
-        "type": "Success"
-      }
-    ]
-  }
-}
-```
-
-
-其他规则链例子：
-
-- 异步+顺序执行：  
-
-  <img src="doc/imgs/rulechain/img_2.png" style="height:50%;width:80%;"/>
-
---------
-
-- 使用子规则链方式：
-
-  <img src="doc/imgs/rulechain/img_3.png" style="height:50%;width:80%;"/>
-
---------
-
-- 一些复杂例子：
-
-  <img src="doc/imgs/rulechain/img_4.png" style="height:50%;width:80%;"/>
-
+### 节点组件
+- [标准组件](https://rulego.cc/pages/88fc3c/) 
+- [rulego-components](https://github.com/rulego/rulego-components)  [文档](https://rulego.cc/pages/d7fc43/) 
+- [rulego-components-ai](https://github.com/rulego/rulego-components-ai) 
+- [rulego-components-ci](https://github.com/rulego/rulego-components-ci) 
+- [rulego-components-iot](https://github.com/rulego/rulego-components-iot) 
+- [自定义节点组件示例](examples/custom_component) [文档](https://rulego.cc/pages/caed1b/)
 
 ## 数据集成
+`RuleGo` 提供`Endpoint`模块对异构系统进行统一的数据集成和处理。详细参考： [Endpoint](endpoint/README_ZH.md)
 
-`RuleGo` 提供`Endpoint`模块对异构系统进行统一的数据集成和处理。详细参考： [Endpoint](endpoint/README_ZH.md) 
+### Endpoint组件
+- [Endpoint组件](https://rulego.cc/pages/691dd3/)
+- [Endpoint DSL](https://rulego.cc/pages/390ad7/)
 
 ## 性能
 
@@ -263,7 +198,8 @@ ruleEngine, err := rulego.New("rule01", []byte(ruleFile), rulego.WithConfig(conf
 
 ## 生态
 
-- [RuleGo-Editor](https://app.rulego.cc) ：规则链可视化编辑器
+- [RuleGo-Editor](https://editor.rulego.cc/) ：规则链可视化编辑器
+- [RuleGo-CI](http://8.134.32.225:9090/ui/) ：CI/CD应用
 - [rulego-components](https://gitee.com/rulego/rulego-components) ：扩展组件库
 - [examples/server](examples/server) ：独立运行的示例工程
 - [examples](examples) : 更多示例
