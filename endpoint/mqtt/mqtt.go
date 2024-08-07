@@ -26,6 +26,7 @@ import (
 	"github.com/rulego/rulego/components/mqtt"
 	"github.com/rulego/rulego/endpoint/impl"
 	"github.com/rulego/rulego/utils/maps"
+	"github.com/rulego/rulego/utils/runtime"
 	"net/textproto"
 	"strconv"
 	"time"
@@ -33,6 +34,12 @@ import (
 
 // Type 组件类型
 const Type = types.EndpointTypePrefix + "mqtt"
+const (
+	// KeyResponseTopic 响应主题metadataKey
+	KeyResponseTopic = "responseTopic"
+	// KeyResponseQos 响应Qos metadataKey
+	KeyResponseQos = "responseQos"
+)
 
 // Endpoint 别名
 type Endpoint = Mqtt
@@ -157,12 +164,25 @@ func (r *ResponseMessage) GetMsg() *types.RuleMsg {
 func (r *ResponseMessage) SetStatusCode(statusCode int) {
 }
 
+// 从msg.Metadata或者响应头获取
+func (r *ResponseMessage) getMetadataValue(metadataName, headerName string) string {
+	var v string
+	if r.GetMsg() != nil {
+		metadata := r.GetMsg().Metadata
+		v = metadata.GetValue(metadataName)
+	}
+	if v == "" {
+		return r.Headers().Get(headerName)
+	} else {
+		return v
+	}
+}
+
 func (r *ResponseMessage) SetBody(body []byte) {
 	r.body = body
-
-	topic := r.Headers().Get("topic")
+	topic := r.getMetadataValue(KeyResponseTopic, KeyResponseTopic)
 	if topic != "" {
-		qosStr := r.Headers().Get("qos")
+		qosStr := r.getMetadataValue(KeyResponseQos, KeyResponseQos)
 		qos := byte(0)
 		if qosStr != "" {
 			qosInt, _ := strconv.Atoi(qosStr)
@@ -312,7 +332,7 @@ func (m *Mqtt) handler(router endpoint.Router) func(c paho.Client, data paho.Mes
 		defer func() {
 			//捕捉异常
 			if e := recover(); e != nil {
-				m.Printf("rest handler err :%v", e)
+				m.Printf("mqtt endpoint handler err :\n%v", runtime.Stack())
 			}
 		}()
 		exchange := &endpoint.Exchange{

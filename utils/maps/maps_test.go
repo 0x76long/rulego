@@ -52,6 +52,7 @@ func TestGet(t *testing.T) {
 		"address": map[string]interface{}{
 			"city":    "Beijing",
 			"country": "China",
+			"detail":  nil,
 		},
 		"friends": []string{"Bob", "Charlie"},
 	}
@@ -64,6 +65,8 @@ func TestGet(t *testing.T) {
 		{"age", 25},
 		{"address.city", "Beijing"},
 		{"address.country", "China"},
+		{"address.detail", nil},
+		{"address.detail.x", nil},
 		{"friends", []string{"Bob", "Charlie"}},
 		{"hobbies", nil},
 		{"address.zipcode", nil},
@@ -71,6 +74,22 @@ func TestGet(t *testing.T) {
 	// 遍历每个测试用例，调用GetFieldValue函数，断言结果是否与期望的值相等
 	for _, c := range cases {
 		actual := Get(value, c.fieldName)
+		assert.Equal(t, c.expected, actual)
+	}
+
+	value2 := map[string]string{
+		"name": "Alice",
+	}
+	// 定义一些测试用例，包含字段名和期望的值
+	cases2 := []struct {
+		fieldName string
+		expected  interface{}
+	}{
+		{"name", "Alice"},
+	}
+	// 遍历每个测试用例，调用GetFieldValue函数，断言结果是否与期望的值相等
+	for _, c := range cases2 {
+		actual := Get(value2, c.fieldName)
 		assert.Equal(t, c.expected, actual)
 	}
 }
